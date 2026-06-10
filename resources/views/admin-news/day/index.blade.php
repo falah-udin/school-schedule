@@ -63,6 +63,17 @@
     @include('admin-news._partials.notifications')
     <div class="card">
         <div class="card-body">
+
+        <div class="alert alert-info">
+            <i class="fa fa-info-circle"></i> 
+            <strong>Informasi Penting:</strong>
+            <ul class="mb-0 mt-2">
+                <li>Hari yang sudah digunakan di <strong>Timedays</strong> (kombinasi hari & waktu) <strong>TIDAK BISA</strong> dihapus langsung.</li>
+                <li>Gunakan tombol <strong>"Generate Sekarang"</strong> di menu Waktu untuk mereset semua data timedays.</li>
+                <li>Atau hapus manual data Timedays yang terkait melalui menu <strong>Manajemen Waktu (Hari + Jam)</strong>.</li>
+            </ul>
+        </div>
+
         <div class="row mb-3">
             <div class="col align-self-center">
                 <h6 class="card-subtitle">

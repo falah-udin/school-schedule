@@ -11,7 +11,7 @@
     <div class="col-12">
       <div class="card">
         <div class="card-body">
-              @include('admin._partials.notifications')
+            @include('admin-news._partials.notifications')
               <h4 class="card-title">{{ $title }}</h4>
               {!! Form::model($rooms, ['route' => ['admin.room.update', $rooms->id], 'files' => true, 'id' => 'form-register']) !!}
               @include('admin-news.room.form')

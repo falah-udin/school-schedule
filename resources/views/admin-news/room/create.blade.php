@@ -12,7 +12,7 @@
       <div class="card">
         <div class="card-body">
           
-                @include('admin._partials.notifications')
+                @include('admin-news._partials.notifications')
                 <h4 class="page-title">{{ $title }}</h4>
                 {!! Form::open(['role' => 'form', 'files' => true, 'id' => 'form-register']) !!}
                 @include('admin-news.room.form')

@@ -47,7 +47,7 @@ Route::group(['namespace' => 'Admin'], function ()
         Route::get('days/edit/{id}', ['as' => 'admin.day.edit', 'uses' => 'DayController@edit']);
         Route::post('days/update/{id?}', ['as' => 'admin.day.update', 'uses' => 'DayController@update']);
         Route::delete('days/delete/{id}', ['as' => 'admin.day.delete', 'uses' => 'DayController@destroy']);
-
+        
         //Time
         Route::get('times', ['as' => 'admin.times', 'uses' => 'TimeController@index']);
         Route::get('times/create', ['as' => 'admin.time.create', 'uses' => 'TimeController@create']);
@@ -55,8 +55,9 @@ Route::group(['namespace' => 'Admin'], function ()
         Route::get('times/edit/{id}', ['as' => 'admin.time.edit', 'uses' => 'TimeController@edit']);
         Route::post('times/update/{id?}', ['as' => 'admin.time.update', 'uses' => 'TimeController@update']);
         Route::delete('times/delete/{id}', ['as' => 'admin.time.delete', 'uses' => 'TimeController@destroy']);
+        Route::get('times/generate', ['as' => 'admin.times.generate', 'uses' => 'TimeController@generate']);
 
-        //Lecturer
+        // Lecturers (yang dipakai algoritma)
         Route::get('lecturers', ['as' => 'admin.lecturers', 'uses' => 'LecturersController@index']);
         Route::get('lecturers/create', ['as' => 'admin.lecturer.create', 'uses' => 'LecturersController@create']);
         Route::post('lecturers/create', ['as' => 'admin.lecturer.store', 'uses' => 'LecturersController@store']);
@@ -69,8 +70,14 @@ Route::group(['namespace' => 'Admin'], function ()
         Route::get('courses/create', ['as' => 'admin.courses.create', 'uses' => 'CoursesController@create']);
         Route::post('courses/create', ['as' => 'admin.courses.store', 'uses' => 'CoursesController@store']);
         Route::get('courses/edit/{id}', ['as' => 'admin.courses.edit', 'uses' => 'CoursesController@edit']);
-        Route::post('courses/update/{id?}', ['as' => 'admin.courses.update', 'uses' => 'CoursesController@update']);
-        Route::delete('courses/delete/{id}', ['as' => 'admin.courses.delete', 'uses' => 'CoursesController@destroy']);
+        Route::get('courses/update/{id}', ['as' => 'admin.courses.update', 'uses' => 'CoursesController@update']);
+        Route::get('courses/delete/{id}', ['as' => 'admin.courses.delete', 'uses' => 'CoursesController@destroy']);
+
+        // Course allocation
+        Route::get('courses/allocation', ['as' => 'admin.courses.allocation', 'uses' => 'CoursesController@allocation']);
+        Route::post('courses/allocation/save', ['as' => 'admin.courses.allocation.save', 'uses' => 'CoursesController@allocationSave']);
+        Route::get('courses/allocation/edit/{id}', ['as' => 'admin.courses.allocation.edit', 'uses' => 'CoursesController@allocationEdit']);
+        Route::post('courses/allocation/update/{id}', ['as' => 'admin.courses.allocation.update', 'uses' => 'CoursesController@allocationUpdate']);
 
         //Room
         Route::get('rooms', ['as' => 'admin.rooms', 'uses' => 'RoomsController@index']);
@@ -86,7 +93,7 @@ Route::group(['namespace' => 'Admin'], function ()
         Route::post('teachs/create', ['as' => 'admin.teach.store', 'uses' => 'TeachController@store']);
         Route::get('teachs/edit/{id}', ['as' => 'admin.teach.edit', 'uses' => 'TeachController@edit']);
         Route::post('teachs/update/{id?}', ['as' => 'admin.teach.update', 'uses' => 'TeachController@update']);
-        Route::delete('teachs/delete/{id}', ['as' => 'admin.teach.delete', 'uses' => 'TeachController@destroy']);
+        Route::get('teachs/delete/{id}', ['as' => 'admin.teach.delete', 'uses' => 'TeachController@destroy']); // UBAH DELETE JADI GET
 
         //TimesNotAvailable
         Route::get('timenotavailable', ['as' => 'admin.timenotavailables', 'uses' => 'TimenotavailableController@index']);
@@ -100,19 +107,25 @@ Route::group(['namespace' => 'Admin'], function ()
         Route::get('timedays', ['as' => 'admin.timedays', 'uses' => 'TimedayController@index']);
         Route::get('timedays/create', ['as' => 'admin.timeday.create', 'uses' => 'TimedayController@create']);
         Route::post('timedays/create', ['as' => 'admin.timeday.store', 'uses' => 'TimedayController@store']);
-        Route::get('timedays/edit/{id}', ['as' => 'admin.timeday.edit', 'uses' => 'TimedayController@edit']);
+        Route::get('timedays/edit/{id}', ['as' => 'admin.timeday.edit', 'uses' => 'TimedayController@edit']); // <-- UNTUK EDIT KOMBINASI
         Route::post('timedays/update/{id?}', ['as' => 'admin.timeday.update', 'uses' => 'TimedayController@update']);
-        Route::delete('timedays/delete/{id}', ['as' => 'admin.timeday.delete', 'uses' => 'TimedayController@destroy']);
+        Route::delete('timedays/delete/{id}', ['as' => 'admin.timedays.delete', 'uses' => 'TimedayController@destroy']);
+        Route::get('timedays/regenerate', ['as' => 'admin.timedays.regenerate', 'uses' => 'TimedayController@regenerate']);
 
         //generate
         Route::get('generates', ['as' => 'admin.generates', 'uses' => 'GenetikController@index']);
         Route::get('generates/submit', ['as' => 'admin.generates.submit', 'uses' => 'GenetikController@submit']);
         Route::get('generates/result/{id}', ['as' => 'admin.generates.result', 'uses' => 'GenetikController@result']);
-        Route::get('generates/result-matrix/{id}', ['as' => 'admin.generates.result.matrix', 'uses' => 'GenetikController@resultMatrix']); // TAMBAHKAN INI
+        Route::get('generates/delete/{id}', ['as' => 'admin.generates.delete', 'uses' => 'GenetikController@delete']); // TAMBAHKAN INI
         Route::get('generates/excel/{id}', ['as' => 'admin.generates.excel', 'uses' => 'GenetikController@excel']);
         Route::get('generates/showClasses/{id}', ['as' => 'admin.generates.classes', 'uses' => 'GenetikController@showClasses']);
         Route::get('generates/filterTeacher/{id}', ['as' => 'admin.generates.filterTeacher', 'uses' => 'GenetikController@showTeacherSearch']);
-        Route::get('generates/filterClasses/{id}', ['as' => 'admin.generates.filterClass', 'uses' => 'GenetikController@showClassesSearch']);    });
+        Route::get('generates/filterClasses/{id}', ['as' => 'admin.generates.filterClass', 'uses' => 'GenetikController@showClassesSearch']);
+
+        Route::post('generates/submit-ajax', ['as' => 'admin.generates.submit.ajax', 'uses' => 'GenetikController@submitAjax']);
+        Route::get('generates/check', ['as' => 'admin.generates.check', 'uses' => 'GenetikController@checkSchedule']);
+
+    });
 });
 
 Route::get('/dashboard','AdminController@dashboard');

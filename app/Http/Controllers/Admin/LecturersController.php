@@ -1,4 +1,4 @@
-<?php namespace App\Http\Controllers\Admin;
+<?php namespace App\Http\Controllers\Newtemp;
 
 use App\Http\Controllers\Controller;
 use App\Models\Lecturer;
@@ -6,77 +6,44 @@ use Illuminate\Http\Request;
 
 class LecturersController extends Controller
 {
-
     public function index(Request $request)
     {
-        $lecturers = Lecturer::orderBy('id', 'desc');
-
-        if (!empty($request->searchname))
-        {
-            $lecturers = $lecturers->where('name', 'LIKE', '%' . $request->searchname . '%');
-        }
-
-        
-
-        $lecturers = $lecturers->paginate(10);
-
-        return view('admin-news.lecturer.index', compact('lecturers'));
+        $lecturers = Lecturer::orderBy('id', 'desc')->paginate(10);
+        return view('newtemp.lecturers.index', compact('lecturers'));
     }
-    public function create(Request $request)
+
+    public function create()
     {
-        return view('admin-news.lecturer.create');
+        return view('newtemp.lecturers.create');
     }
+
     public function store(Request $request)
     {
         $this->validate($request, [
-            
-            
-            'name'           => 'required|unique:lecturers,name',
-
+            'name' => 'required|unique:lecturers,name'
         ]);
 
-        $params = [
-            
-            'name'           => $request->input('name'),
-        ];
-
-        $lecturers = Lecturer::create($params);
-
-        return redirect()->route('admin.lecturers');
+        Lecturer::create(['name' => $request->name]);
+        return redirect()->route('new.lecturer')->with('success', 'Guru berhasil ditambahkan');
     }
 
     public function edit($id)
     {
-        $lecturers = Lecturer::find($id);
-
-        if ($lecturers == null)
-        {
-            return view('admin-news.layouts.404');
-        }
-
-        return view('admin-news.lecturer.edit', compact('lecturers'));
+        $lecturer = Lecturer::find($id);
+        return view('newtemp.lecturers.edit', compact('lecturer'));
     }
 
     public function update(Request $request, $id)
     {
-        $this->validate($request, [
-    
-            'name'           => 'required|unique:lecturers,name',
-
-        ]);
-
-        $lecturers                 = Lecturer::find($id);
-        $lecturers->name           = $request->input('name');
-        $lecturers->save();
-
-        return redirect()->route('admin.lecturers');
+        $lecturer = Lecturer::find($id);
+        $lecturer->name = $request->name;
+        $lecturer->save();
+        return redirect()->route('new.lecturer')->with('success', 'Guru berhasil diubah');
     }
 
     public function destroy($id)
     {
         Lecturer::find($id)->delete();
-
-        return redirect()->route('admin.lecturers')->with('success', 'Data guru berhasil dihapus');
+        return redirect()->route('new.lecturer')->with('success', 'Guru berhasil dihapus');
     }
-
 }

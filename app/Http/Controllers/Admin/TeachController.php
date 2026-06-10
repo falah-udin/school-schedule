@@ -12,35 +12,35 @@ class TeachController extends Controller
 
     public function index(Request $request)
     {
-        $searchlecturers = $request->input('searchlecturers');
-        $searchcourse    = $request->input('searchcourse');
-        $searchroom      = $request->input('searchclass');
+        $search = $request->input('search');
+        $filterClass = $request->input('filter_class');
+        $filterLecturer = $request->input('filter_lecturer');
         
-        // Mulai dengan query builder
-        $teachs = Teach::query();
+        $teachs = Teach::select('teachs.*')
+            ->join('lecturers', 'lecturers.id', '=', 'teachs.lecturers_id')
+            ->join('courses', 'courses.id', '=', 'teachs.courses_id')
+            ->join('rooms', 'rooms.id', '=', 'teachs.class_room');
         
-        // Filter by lecturer name (hanya jika ada input)
-        if (!empty($searchlecturers)) {
-            $teachs = $teachs->whereHas('lecturer', function ($query) use ($searchlecturers) {
-                $query->where('lecturers.name', 'LIKE', '%' . $searchlecturers . '%');
+        // Filter berdasarkan pencarian
+        if (!empty($search)) {
+            $teachs = $teachs->where(function($q) use ($search) {
+                $q->where('lecturers.name', 'LIKE', '%' . $search . '%')
+                ->orWhere('courses.name', 'LIKE', '%' . $search . '%')
+                ->orWhere('rooms.name', 'LIKE', '%' . $search . '%');
             });
         }
         
-        // Filter by course name (hanya jika ada input)
-        if (!empty($searchcourse)) {
-            $teachs = $teachs->whereHas('course', function ($query) use ($searchcourse) {
-                $query->where('courses.name', 'LIKE', '%' . $searchcourse . '%');
-            });
+        // Filter berdasarkan kelas
+        if (!empty($filterClass)) {
+            $teachs = $teachs->where('rooms.name', $filterClass);
         }
         
-        // Filter by room name (hanya jika ada input)
-        if (!empty($searchroom)) {
-            $teachs = $teachs->whereHas('room', function ($query) use ($searchroom) {
-                $query->where('rooms.name', 'LIKE', '%' . $searchroom . '%');
-            });
+        // Filter berdasarkan guru
+        if (!empty($filterLecturer)) {
+            $teachs = $teachs->where('lecturers.name', $filterLecturer);
         }
         
-        $teachs = $teachs->orderBy('id', 'desc')->paginate(10);
+        $teachs = $teachs->orderBy('teachs.id', 'desc')->paginate(15);
         
         return view('admin-news.teach.index', compact('teachs'));
     }
@@ -107,8 +107,18 @@ class TeachController extends Controller
 
     public function destroy($id)
     {
+        // Cek apakah teach digunakan di schedule
+        $scheduleCount = \App\Models\Schedule::where('teachs_id', $id)->count();
+        
+        if ($scheduleCount > 0) {
+            $message = '<strong>⚠️ Pengampu tidak dapat dihapus!</strong><br><br>';
+            $message .= 'Data ini sudah digunakan di <strong>' . $scheduleCount . '</strong> jadwal.<br><br>';
+            $message .= '<strong>📌 Solusi:</strong> Hapus jadwal terlebih dahulu, atau generate ulang jadwal.';
+            
+            return redirect()->route('admin.teachs')->with('danger', $message);
+        }
+        
         Teach::find($id)->delete();
-
-        return redirect()->route('admin.teachs')->with('success', 'Pengampu berhasil dihapus');
+        return redirect()->route('admin.teachs')->with('success', '<strong>✅ Pengampu berhasil dihapus!</strong>');
     }
 }

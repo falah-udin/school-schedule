@@ -51,7 +51,7 @@
             <!-- ============================================================== -->
             <!-- Active user - project- visitors -->
             <!-- ============================================================== -->
-            @include('admin._partials.notifications')
+            @include('admin-news._partials.notifications')
             <div class="card">
               <div class="card-body">
                 <div class="row mb-3">

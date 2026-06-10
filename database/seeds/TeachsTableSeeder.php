@@ -10,41 +10,53 @@ class TeachsTableSeeder extends Seeder
 {
     public function run()
     {
-        $courses = Course::all()->keyBy('name');
-        $rooms = Room::all();
-        $lecturers = Lecturer::all();
+        // Hapus data lama
+        DB::statement('SET FOREIGN_KEY_CHECKS=0');
+        Teach::truncate();
+        DB::statement('SET FOREIGN_KEY_CHECKS=1');
         
+        $courses = Course::all();
+        $rooms = Room::all();
+        
+        // Mapping guru ke mapel (per mapel bisa punya multiple guru)
         $guruMapel = [
-            'Guru Matematika' => 'Matematika',
-            'Guru Matematika 2' => 'Matematika',
-            'Guru Bahasa Indonesia' => 'Bahasa Indonesia',
-            'Guru Bahasa Indonesia 2' => 'Bahasa Indonesia',
-            'Guru Bahasa Inggris' => 'Bahasa Inggris',
-            'Guru Bahasa Inggris 2' => 'Bahasa Inggris',
-            'Guru IPA' => 'IPA',
-            'Guru IPA 2' => 'IPA',
-            'Guru IPS' => 'IPS',
-            'Guru PPKn' => 'PPKn',
-            'Guru Agama' => 'Agama',
-            'Guru Penjaskes' => 'Penjaskes',
-            'Guru SBK' => 'SBK/Prakarya',
-            'Guru MULOK' => 'MULOK 1',
-            'Guru MULOK 2' => 'MULOK 1',
+            'Matematika' => ['Guru Matematika', 'Guru Matematika 2'],
+            'Bahasa Indonesia' => ['Guru Bahasa Indonesia', 'Guru Bahasa Indonesia 2'],
+            'Bahasa Inggris' => ['Guru Bahasa Inggris', 'Guru Bahasa Inggris 2'],
+            'IPA' => ['Guru IPA', 'Guru IPA 2'],
+            'IPS' => ['Guru IPS'],
+            'PPKn' => ['Guru PPKn'],
+            'Agama' => ['Guru Agama'],
+            'Penjaskes' => ['Guru Penjaskes'],
+            'SBK/Prakarya' => ['Guru SBK'],
+            'MULOK 1' => ['Guru MULOK', 'Guru MULOK 2'],
         ];
         
-        foreach ($lecturers as $guru) {
-            $mapel = $guruMapel[$guru->name];
-            $courseId = $courses[$mapel]->id;
-            
-            foreach ($rooms as $kelas) {
+        $totalTeach = 0;
+        
+        foreach ($rooms as $room) {
+            foreach ($courses as $course) {
+                $guruNames = $guruMapel[$course->name] ?? ['Guru ' . $course->name];
+                
+                // Pilih guru secara round-robin berdasarkan ID kelas
+                $index = ($room->id - 1) % count($guruNames);
+                $guruName = $guruNames[$index];
+                $guru = Lecturer::where('name', $guruName)->first();
+                
+                if (!$guru) {
+                    $this->command->error("Guru untuk {$course->name} tidak ditemukan!");
+                    continue;
+                }
+                
                 Teach::create([
+                    'courses_id' => $course->id,
                     'lecturers_id' => $guru->id,
-                    'courses_id' => $courseId,
-                    'class_room' => $kelas->id
+                    'class_room' => $room->id
                 ]);
+                $totalTeach++;
             }
         }
         
-        $this->command->info('Total Teach: ' . Teach::count());
+        $this->command->info('Total Teach: ' . $totalTeach . ' (seharusnya ' . ($courses->count() * $rooms->count()) . ')');
     }
 }

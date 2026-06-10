@@ -5,6 +5,7 @@ use App\Models\Day;
 use App\Models\Time;
 use App\Models\Timeday;
 use Illuminate\Http\Request;
+use DB;
 
 class TimedayController extends Controller
 {
@@ -29,18 +30,27 @@ class TimedayController extends Controller
     public function store(Request $request)
     {
         $this->validate($request, [
-            'days'          => 'required|unique:timedays,days_id,NULL,NULL,times_id,'.$request['times'],
-            'times'         => 'required|unique:timedays,times_id,NULL,NULL,days_id,'.$request['days'],
+            'days'  => 'required|exists:days,id',
+            'times' => 'required|exists:times,id',
         ]);
 
+        // Cek apakah kombinasi sudah ada
+        $exists = Timeday::where('days_id', $request->days)
+            ->where('times_id', $request->times)
+            ->first();
+
+        if ($exists) {
+            return redirect()->back()->with('danger', 'Kombinasi hari dan waktu sudah ada!');
+        }
+
         $params = [
-            'days_id'       => $request->input('days'),
-            'times_id'      => $request->input('times'),
+            'days_id'  => $request->input('days'),
+            'times_id' => $request->input('times'),
         ];
 
-        $timedays = Timeday::create($params);
+        Timeday::create($params);
 
-        return redirect()->route('admin.timedays');
+        return redirect()->route('admin.timedays')->with('success', 'Kombinasi waktu berhasil ditambahkan!');
     }
 
     public function edit($id)
@@ -60,23 +70,59 @@ class TimedayController extends Controller
     public function update(Request $request, $id)
     {
         $this->validate($request, [
-            'days'          => 'required|unique:timedays,days_id,NULL,NULL,times_id,'.$request['times'],
-            'times'         => 'required|unique:timedays,times_id,NULL,NULL,days_id,'.$request['days'],
+            'days'  => 'required|exists:days,id',
+            'times' => 'required|exists:times,id',
         ]);
 
-        $timedays                = Timeday::find($id);
-        $timedays->days_id       = $request->input('days');
-        $timedays->times_id      = $request->input('times');
+        // Cek unique combination
+        $exists = Timeday::where('days_id', $request->days)
+            ->where('times_id', $request->times)
+            ->where('id', '!=', $id)
+            ->first();
+
+        if ($exists) {
+            return redirect()->back()->with('danger', 'Kombinasi hari dan waktu sudah ada!');
+        }
+
+        $timedays = Timeday::find($id);
+        $timedays->days_id  = $request->input('days');
+        $timedays->times_id = $request->input('times');
         $timedays->save();
 
-        return redirect()->route('admin.timedays');
+        return redirect()->route('admin.timedays')->with('success', 'Kombinasi waktu berhasil diubah!');
     }
 
     public function destroy($id)
     {
-        Timeday::find($id)->delete();
+        $timeday = Timeday::find($id);
+        
+        if ($timeday) {
+            $timeday->delete();
+            return redirect()->route('admin.timedays')->with('success', 'Data berhasil dihapus!');
+        }
+        
+        return redirect()->route('admin.timedays')->with('danger', 'Data tidak ditemukan!');
+    }
 
-        return redirect()->route('admin.timedays')->with('success', 'Data management waktu berhasil dihapus');
+    public function regenerate()
+    {
+        DB::statement('SET FOREIGN_KEY_CHECKS=0');
+        Timeday::truncate();
+        DB::statement('SET FOREIGN_KEY_CHECKS=1');
+        
+        $days = Day::orderByRaw("FIELD(name_day, 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu')")->get();
+        $times = Time::orderBy('time_begin')->get();
+        
+        foreach ($days as $day) {
+            foreach ($times as $time) {
+                Timeday::create([
+                    'days_id' => $day->id,
+                    'times_id' => $time->id,
+                ]);
+            }
+        }
+        
+        return redirect()->route('admin.timedays')->with('success', 'Timedays berhasil diregenerate!');
     }
 
 }
