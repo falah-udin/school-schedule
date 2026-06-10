@@ -379,6 +379,15 @@
         });
     }
     
+    // Paksa semua AJAX pakai HTTPS
+    $.ajaxSetup({
+        beforeSend: function(xhr, settings) {
+            if (settings.url && settings.url.startsWith('http://')) {
+                settings.url = settings.url.replace('http://', 'https://');
+            }
+        }
+    });
+
     function startGenerateProcess(mode, kromosom, generasi, crossover, mutasi) {
         var selectedClasses = [];
         $('.class-checkbox:checked').each(function() {
@@ -391,6 +400,7 @@
         updateStep(2, 'Membangun kromosom...');
         updateProgress(25);
         
+        // Kirim request ke server
         $.ajax({
             url: '{{ route("admin.generates.submit") }}',
             method: 'GET',
@@ -410,6 +420,10 @@
                     setTimeout(function() {
                         window.location.href = response.redirect;
                     }, 1000);
+                } else {
+                    // Jika tidak ada redirect, mulai polling
+                    addLogMessage('Menunggu proses selesai...', 'info');
+                    startPolling();
                 }
             },
             error: function(xhr) {
@@ -425,7 +439,7 @@
             }
         });
     }
-    
+
     function startGenerate() {
         var kromosom = $('#kromosom').val();
         var generasi = $('#generasi').val();

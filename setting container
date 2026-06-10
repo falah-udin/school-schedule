@@ -1,1 +1,4 @@
 docker exec -it school-master-php sh
+
+
+docker restart school-master-php

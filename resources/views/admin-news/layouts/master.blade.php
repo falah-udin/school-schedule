@@ -5,6 +5,7 @@
         <meta http-equiv="X-UA-Compatible" content="IE=edge"/>
         <meta name="msapplication-config" content="{{ URL::to('assets/img/favicon/browserconfig.xml') }}">
         <meta name="theme-color" content="#ffffff">
+        <meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests">
         <meta content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" name="viewport"/>
         <title>
             Al-Andalus - @yield('title')
