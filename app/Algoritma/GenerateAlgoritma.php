@@ -69,7 +69,7 @@ class GenerateAlgoritma
     /**
      * Proses random jadwal dengan validasi KETAT
      */
-    public function randomingProcess($type, $maxAttempts = 2000)
+    public function randomingProcess($type, $maxAttempts = 10000)
     {
         $teach = $this->getUnscheduledTeach($type);
         
@@ -78,35 +78,109 @@ class GenerateAlgoritma
         }
         
         $course = $teach->course;
+        // 🔥 TAMBAHKAN INI: DETEKSI MAPEL KAKU (min == max)
+        $isRigid = ($course->min_hours_per_day == $course->max_hours_per_day);
+        
+        // 🔥 Jika kaku, proses khusus (langsung ambil semua JP dalam 1 hari)
+        if ($isRigid) {
+            $jpPerDay = $course->min_hours_per_day;
+            $totalJp = $course->hours_per_week;
+            $neededDays = ceil($totalJp / $jpPerDay);
+            
+            // Cek apakah total JP kelipatan dari jpPerDay
+            if ($totalJp % $jpPerDay != 0) {
+                \Log::error("❌ Mapel kaku {$course->name}: {$totalJp} JP tidak kelipatan {$jpPerDay}");
+                return null;
+            }
+            
+            for ($d = 0; $d < $neededDays; $d++) {
+                $validDay = $this->getValidDayForMin($type, $teach, $jpPerDay);
+                
+                if (!$validDay) {
+                    \Log::warning("Tidak ada hari yang cukup untuk mapel kaku {$course->name}");
+                    return null;
+                }
+                
+                // Simpan semua slot sekaligus
+                foreach ($validDay['slots'] as $slot) {
+                    $this->saveSchedule($type, $teach, $validDay['day'], $slot);
+                }
+            }
+            
+            // Update scheduled hours (total JP)
+            for ($i = 0; $i < $totalJp; $i++) {
+                $this->incrementScheduledHours($type, $teach->id);
+            }
+            
+            return true;
+        }
+        
         $attempt = 0;
         
         while ($attempt < $maxAttempts) {
+            // 🔥 DEFINISIKAN $day DI AWAL LOOP
             $day = Day::inRandomOrder()->first();
             
             $currentDayHours = $this->getDailyHours($type, $teach->id, $day->id);
-            $remainingNeeded = $course->hours_per_week - $this->getScheduledHours($type, $teach->id);
+            $totalScheduled = $this->getScheduledHours($type, $teach->id);
+            $remainingNeeded = $course->hours_per_week - $totalScheduled;
             
-            // Jika sudah mencapai max per hari, skip
+            // Jika sudah mencapai target, stop
+            if ($totalScheduled >= $course->hours_per_week) {
+                return null;
+            }
+            
+            // MAX PER HARI
             if ($currentDayHours >= $course->max_hours_per_day) {
                 $attempt++;
                 continue;
             }
             
-            // Jika sudah mencapai target mingguan, stop
-            if ($this->getScheduledHours($type, $teach->id) >= $course->hours_per_week) {
-                return null;
+            // CEK KEMUNGKINAN
+            $remainingDays = $this->getRemainingDays($type, $teach->id);
+            $minRequiredPerDay = $course->min_hours_per_day;
+            
+            // 🔥 PERBAIKAN: pakai $course->max_hours_per_day
+            $daysLeftIfSkip = $remainingDays - 1;
+            $maxPossibleWithSkip = $daysLeftIfSkip * $course->max_hours_per_day;
+            
+            // Jika skip hari ini mengakibatkan tidak mungkin mencapai target
+            if ($remainingNeeded > $maxPossibleWithSkip && $currentDayHours == 0) {
+                $attempt--; // tidak dihitung sebagai attempt
+            }
+            
+            // Jika sisa kebutuhan < min_per_hari
+            if ($remainingNeeded > 0 && $remainingNeeded < $minRequiredPerDay && $currentDayHours == 0) {
+                \Log::warning("IMPOSSIBLE: Butuh {$remainingNeeded} JP tapi min per hari = {$minRequiredPerDay}. Hapus jadwal sebelumnya untuk teach {$teach->id}");
+                
+                Schedule::where('type', $type)
+                    ->where('teachs_id', $teach->id)
+                    ->delete();
+                
+                $this->scheduledHours = [];
+                $this->dailyCount = [];
+                $this->classDailyCount = [];
+                
+                return $this->randomingProcess($type, $maxAttempts);
             }
             
             $time = null;
             
-            // 🔥 CEK: Apakah sudah ada jadwal di hari ini?
+            // AMBIL SLOT DARI TIMEDAYS
+            $availableSlots = $this->getAvailableSlotsFromTimedays($type, $day->id);
+            
+            if (empty($availableSlots)) {
+                $attempt++;
+                continue;
+            }
+            
+            // CEK SUDAH ADA JADWAL DI HARI INI
             $existingInDay = Schedule::where('type', $type)
                 ->where('teachs_id', $teach->id)
                 ->where('days_id', $day->id)
                 ->exists();
             
             if ($existingInDay) {
-                // Jika sudah ada, cari slot LANGSUNG setelah slot terakhir
                 $lastSlot = Schedule::where('type', $type)
                     ->where('teachs_id', $teach->id)
                     ->where('days_id', $day->id)
@@ -114,30 +188,40 @@ class GenerateAlgoritma
                     ->first();
                 
                 if ($lastSlot) {
-                    $nextSlot = Time::where('id', '>', $lastSlot->times_id)
-                        ->orderBy('time_begin')
-                        ->first();
-                    
-                    if ($nextSlot) {
-                        $time = $nextSlot;
+                    foreach ($availableSlots as $slot) {
+                        if ($slot->id > $lastSlot->times_id) {
+                            $time = $slot;
+                            break;
+                        }
                     }
                 }
             }
             
-            // Jika tidak ada jadwal sebelumnya atau slot berikutnya tidak tersedia, cari slot dari awal
-            if (!$time) {
-                // Jika ini JP pertama di hari ini, cari slot dari awal
-                if ($currentDayHours == 0 && $remainingNeeded >= $course->min_hours_per_day) {
-                    $consecutiveSlots = $this->getConsecutiveAvailableSlotsFromStart($type, $teach, $day, $course->min_hours_per_day);
+            // JIKA BELUM ADA JADWAL DI HARI INI
+            if (!$time && $currentDayHours == 0) {
+                if ($remainingNeeded >= $minRequiredPerDay) {
+                    $consecutiveSlots = $this->getConsecutiveSlotsFromTimedays($type, $teach, $day, $availableSlots, $minRequiredPerDay);
                     if ($consecutiveSlots) {
                         $time = $consecutiveSlots[0];
                     }
+                } else {
+                    if ($remainingNeeded > 0) {
+                        $consecutiveSlots = $this->getConsecutiveSlotsFromTimedays($type, $teach, $day, $availableSlots, $remainingNeeded);
+                        if ($consecutiveSlots) {
+                            $time = $consecutiveSlots[0];
+                        }
+                    }
                 }
             }
             
-            // Jika masih belum dapat slot, coba random
-            if (!$time) {
-                $time = Time::inRandomOrder()->first();
+            // PRIORITAS: Ambil slot paling awal
+            if (!$time && !empty($availableSlots)) {
+                $time = $this->getEarliestAvailableSlot($type, $teach, $day, $availableSlots);
+            }
+            
+            // FALLBACK: Random
+            if (!$time && !empty($availableSlots)) {
+                $time = $availableSlots[array_rand($availableSlots)];
             }
             
             if (!$time) {
@@ -145,7 +229,7 @@ class GenerateAlgoritma
                 continue;
             }
             
-            // 6. Cek bentrok guru
+            // VALIDASI BENTROK
             $check_lecturers_id = Schedule::join('teachs', 'teachs.id', '=', 'schedules.teachs_id')
                 ->join('lecturers', 'lecturers.id', '=', 'teachs.lecturers_id')
                 ->where('lecturers_id', $teach->lecturers_id)
@@ -154,14 +238,12 @@ class GenerateAlgoritma
                 ->where('type', $type)
                 ->first();
             
-            // 7. Cek bentrok kelas
             $check_class_id = Schedule::where('rooms_id', $teach->class_room)
                 ->where('days_id', $day->id)
                 ->where('times_id', $time->id)
                 ->where('type', $type)
                 ->first();
             
-            // 8. Cek waktu tidak available
             $check_timenotavailable = Timenotavailable::where('lecturers_id', $teach->lecturers_id)
                 ->where('days_id', $day->id)
                 ->where('times_id', $time->id)
@@ -190,19 +272,154 @@ class GenerateAlgoritma
         
         return null;
     }
-    
+
     /**
-     * Hitung sisa hari yang tersedia untuk teach
+     * Hitung jumlah hari yang TERSISA (belum ada jadwal sama sekali)
      */
     private function getRemainingDays($type, $teachId)
     {
         $usedDays = Schedule::where('type', $type)
             ->where('teachs_id', $teachId)
             ->groupBy('days_id')
-            ->count();
+            ->pluck('days_id')
+            ->toArray();
         
-        return 6 - $usedDays;
+        $allDays = DB::table('days')->pluck('id')->toArray();
+        $remainingDays = array_diff($allDays, $usedDays);
+        
+        return count($remainingDays);
     }
+
+    /**
+     * Cari hari yang bisa menampung minRequiredPerDay sekaligus
+     */
+    private function getValidDayForMin($type, $teach, $minRequiredPerDay)
+    {
+        $course = $teach->course;
+        $maxAttempts = 50;
+        
+        for ($i = 0; $i < $maxAttempts; $i++) {
+            $day = Day::inRandomOrder()->first();
+            $currentDayHours = $this->getDailyHours($type, $teach->id, $day->id);
+            
+            // Cek apakah hari ini masih bisa menampung minRequiredPerDay
+            if ($currentDayHours + $minRequiredPerDay > $course->max_hours_per_day) {
+                continue;
+            }
+            
+            // Cek apakah ada slot berurutan sepanjang minRequiredPerDay
+            $availableSlots = $this->getAvailableSlotsFromTimedays($type, $day->id);
+            $consecutiveSlots = $this->getConsecutiveSlotsFromTimedays($type, $teach, $day, $availableSlots, $minRequiredPerDay);
+            
+            if ($consecutiveSlots) {
+                return ['day' => $day, 'slots' => $consecutiveSlots];
+            }
+        }
+        
+        return null;
+    }
+
+    /**
+     * Ambil slot paling awal yang tersedia untuk hari ini
+     */
+    private function getEarliestAvailableSlot($type, $teach, $day, $availableSlots)
+    {
+        foreach ($availableSlots as $slot) {
+            // Cek bentrok guru
+            $teacherConflict = Schedule::join('teachs', 'teachs.id', '=', 'schedules.teachs_id')
+                ->join('lecturers', 'lecturers.id', '=', 'teachs.lecturers_id')
+                ->where('lecturers_id', $teach->lecturers_id)
+                ->where('days_id', $day->id)
+                ->where('times_id', $slot->id)
+                ->where('type', $type)
+                ->exists();
+            
+            // Cek bentrok kelas
+            $classConflict = Schedule::where('rooms_id', $teach->class_room)
+                ->where('days_id', $day->id)
+                ->where('times_id', $slot->id)
+                ->where('type', $type)
+                ->exists();
+            
+            // Cek waktu tidak available
+            $timeNotAvailable = Timenotavailable::where('lecturers_id', $teach->lecturers_id)
+                ->where('days_id', $day->id)
+                ->where('times_id', $slot->id)
+                ->exists();
+            
+            if (!$teacherConflict && !$classConflict && !$timeNotAvailable) {
+                return $slot;
+            }
+        }
+        
+        return null;
+    }
+
+    /**
+     * Ambil slot waktu yang tersedia berdasarkan timedays (hari + waktu)
+     */
+    private function getAvailableSlotsFromTimedays($type, $dayId)
+    {
+        // Ambil semua timedays untuk hari ini
+        $timedays = \App\Models\Timeday::where('days_id', $dayId)
+            ->with('time')
+            ->orderBy('times_id', 'asc')
+            ->get();
+        
+        $availableSlots = [];
+        
+        foreach ($timedays as $td) {
+            $time = $td->time;
+            if (!$time) continue;
+            
+            // Cek apakah slot ini sudah terisi penuh untuk kelas ini?
+            // (tidak perlu cek di sini, nanti divalidasi di bentrok)
+            $availableSlots[] = $time;
+        }
+        
+        return $availableSlots;
+    }
+
+    /**
+     * Cari slot berurutan dari timedays
+     */
+    private function getConsecutiveSlotsFromTimedays($type, $teach, $day, $availableSlots, $neededSlots)
+    {
+        $count = count($availableSlots);
+        
+        for ($i = 0; $i <= $count - $neededSlots; $i++) {
+            $isAvailable = true;
+            $slots = [];
+            
+            for ($j = 0; $j < $neededSlots; $j++) {
+                $slot = $availableSlots[$i + $j];
+                
+                // Cek apakah slot sudah terisi untuk guru atau kelas
+                $isBooked = Schedule::where('type', $type)
+                    ->where('days_id', $day->id)
+                    ->where('times_id', $slot->id)
+                    ->where(function($q) use ($teach) {
+                        $q->where('rooms_id', $teach->class_room)
+                        ->orWhere('teachs_id', $teach->id);
+                    })
+                    ->exists();
+                
+                if ($isBooked) {
+                    $isAvailable = false;
+                    break;
+                }
+                
+                $slots[] = $slot;
+            }
+            
+            if ($isAvailable) {
+                return $slots;
+            }
+        }
+        
+        return null;
+    }
+    
     
     /**
      * Ambil teach yang masih kurang jamnya (prioritas: yang hampir selesai)
@@ -361,7 +578,7 @@ class GenerateAlgoritma
         $this->classDailyCount[$type][$roomId][$dayId]++;
     }
     
-    public function randKromosom($kromosom, $count_teachs)
+    public function randKromosom($kromosom, $count_teachs, $mode = 'replace_all')
     {
         $check = $this->checkIfPossible();
         
@@ -375,32 +592,81 @@ class GenerateAlgoritma
             throw new \Exception($message);
         }
         
-        for ($i = 0; $i < $kromosom; $i++) {
-            Schedule::where('type', $i + 1)->delete();
+        // 🔥 TENTUKAN TYPE AWAL BERDASARKAN MODE
+        $startType = 0;
+        if ($mode == 'append') {
+            $startType = (Schedule::max('type') ?? -1) + 1;
+            \Log::info("Mode APPEND: Memulai dari type {$startType}");
         }
         
         for ($i = 0; $i < $kromosom; $i++) {
-            $this->scheduledHours = [];
-            $this->dailyCount = [];
-            $this->classDailyCount = [];
+            $maxRetries = 5;
+            $retryCount = 0;
+            $success = false;
+            $bestRealCount = 0;
+            $bestData = null; // Simpan data terbaik
             
-            $totalRequiredSlots = $this->calculateTotalRequiredSlots();
-            
-            $successCount = 0;
-            for ($j = 0; $j < $totalRequiredSlots; $j++) {
-                $result = $this->randomingProcess($i);
-                if ($result) {
-                    $successCount++;
+            while ($retryCount < $maxRetries && !$success) {
+                $this->scheduledHours = [];
+                $this->dailyCount = [];
+                $this->classDailyCount = [];
+                
+                $totalRequiredSlots = $this->calculateTotalRequiredSlots();
+                $currentType = $startType + $i;
+                
+                \Log::info("Generate type {$currentType} (target: {$totalRequiredSlots} JP) - Percobaan ke-" . ($retryCount + 1));
+                
+                // Hapus data lama untuk percobaan ini
+                Schedule::where('type', $currentType)->delete();
+                
+                $successCount = 0;
+                for ($j = 0; $j < $totalRequiredSlots; $j++) {
+                    $result = $this->randomingProcess($currentType);
+                    if ($result) {
+                        $successCount++;
+                    } else {
+                        \Log::warning("Gagal mengisi slot ke-" . ($j+1) . " untuk type {$currentType}");
+                        break;
+                    }
+                }
+                
+                $this->repairMinHours($currentType);
+                
+                $realCount = Schedule::where('type', $currentType)->count();
+                $percentage = $totalRequiredSlots > 0 ? round(($realCount / $totalRequiredSlots) * 100) : 0;
+                
+                // 🔥 SIMPAN DATA TERBAIK (yang paling mendekati target)
+                if ($realCount > $bestRealCount) {
+                    $bestRealCount = $realCount;
+                    // Data sudah tersimpan di database, tidak perlu backup
+                }
+                
+                if ($realCount >= $totalRequiredSlots) {
+                    $success = true;
+                    \Log::info("✅ KROMOSOM TYPE {$currentType}: BERHASIL 100% ({$realCount}/{$totalRequiredSlots} JP)");
                 } else {
-                    break;
+                    $retryCount++;
+                    \Log::warning("⚠️ KROMOSOM TYPE {$currentType}: GAGAL! Hanya {$realCount}/{$totalRequiredSlots} JP ({$percentage}%). Retry {$retryCount}/{$maxRetries}");
+                    
+                    if ($retryCount >= $maxRetries) {
+                        // 🔥 JANGAN HAPUS DATA! Biarkan data terakhir yang sudah 89% tersimpan
+                        \Log::error("❌ KROMOSOM TYPE {$currentType}: GAGAL TOTAL setelah {$maxRetries} kali percobaan! Data terakhir ({$bestRealCount}/{$totalRequiredSlots} JP) tetap disimpan.");
+                        
+                        // 🔥 TIDAK MENGHAPUS DATA, LANGSUNG LANJUT KE KROMOSOM BERIKUTNYA
+                        // break; // Tetap lanjut ke kromosom berikutnya
+                    } else {
+                        // Hapus data yang gagal hanya jika masih ada percobaan tersisa
+                        Schedule::where('type', $currentType)->delete();
+                    }
                 }
             }
-            
-            // Perbaiki jadwal yang melanggar MIN per hari
-            $this->repairMinHours($i);
-            
-            \Log::info("Kromosom " . ($i + 1) . ": " . $successCount . " dari " . $totalRequiredSlots . " slot terjadwal");
         }
+        
+        // Ringkasan akhir
+        $totalAll = Schedule::count();
+        \Log::info("========== GENERATE SELESAI ==========");
+        \Log::info("Total semua jadwal: {$totalAll} JP");
+        \Log::info("Type yang tersedia: " . json_encode(Schedule::select('type')->distinct()->pluck('type')->toArray()));
         
         return [];
     }
@@ -521,12 +787,19 @@ class GenerateAlgoritma
         return $schedules;
     }
 
+    
     /**
      * Cari slot waktu berurutan yang tersedia dalam satu hari (mulai dari jam pertama)
      */
     private function getConsecutiveAvailableSlotsFromStart($type, $teach, $day, $neededSlots)
     {
-        $times = Time::orderBy('time_begin')->get();
+        // 🔥 AMBIL DARI TIMEDAYS, BUKAN DARI TIME
+        $timedays = \App\Models\Timeday::where('days_id', $day->id)
+            ->with('time')
+            ->orderBy('time_begin')
+            ->get();
+        
+        $times = $timedays->pluck('time');
         
         for ($i = 0; $i <= $times->count() - $neededSlots; $i++) {
             $isAvailable = true;
@@ -535,7 +808,6 @@ class GenerateAlgoritma
             for ($j = 0; $j < $neededSlots; $j++) {
                 $checkTime = $times[$i + $j];
                 
-                // Cek apakah slot ini sudah terisi untuk guru atau kelas
                 $isBooked = Schedule::where('type', $type)
                     ->where('days_id', $day->id)
                     ->where('times_id', $checkTime->id)
@@ -643,6 +915,64 @@ class GenerateAlgoritma
         } while ($fixed);
         
         return $repairCount;
+    }
+
+    /**
+     * Validasi akhir apakah semua target tercapai
+     */
+    public function validateAllTargets($type)
+    {
+        $teachs = Teach::with('course');
+        
+        if (!empty($this->filteredClasses)) {
+            $teachs = $teachs->whereIn('class_room', $this->filteredClasses);
+        }
+        
+        $teachs = $teachs->get();
+        $violations = [];
+        
+        foreach ($teachs as $teach) {
+            $scheduled = Schedule::where('type', $type)
+                ->where('teachs_id', $teach->id)
+                ->count();
+            
+            $target = $teach->course->hours_per_week;
+            
+            if ($scheduled != $target) {
+                $violations[] = [
+                    'course' => $teach->course->name,
+                    'teacher' => $teach->lecturer->name,
+                    'class' => $teach->room->name,
+                    'target' => $target,
+                    'actual' => $scheduled,
+                    'difference' => $target - $scheduled
+                ];
+            }
+        }
+        
+        return $violations;
+    }
+    
+    /**
+     * Simpan jadwal ke database
+     */
+    private function saveSchedule($type, $teach, $day, $time)
+    {
+        $params = [
+            'teachs_id' => $teach->id,
+            'days_id' => $day->id,
+            'times_id' => $time->id,
+            'rooms_id' => $teach->class_room,
+            'type' => $type
+        ];
+        
+        $insert = Schedule::create($params);
+        
+        $this->incrementScheduledHours($type, $teach->id);
+        $this->incrementDailyHours($type, $teach->id, $day->id);
+        $this->incrementClassDailyHours($type, $teach->class_room, $day->id);
+        
+        return $insert;
     }
 
 }

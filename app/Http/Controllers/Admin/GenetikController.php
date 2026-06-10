@@ -365,8 +365,12 @@ class GenetikController extends Controller
     // Tambahkan property untuk menyimpan progress
     private $generateProgress = [];
 
-    public function submitAjaxProgress(Request $request)
+    public function submitAjaxProgress(Request $request)   
     {
+        \Log::info("=== submitAjaxProgress DIPANGGIL ===");
+        \Log::info("Mode: " . $request->input('mode'));
+        \Log::info("Kromosom: " . $request->input('kromosom'));
+        
         set_time_limit(3600);
         ini_set('memory_limit', '1024M');
         
@@ -380,10 +384,12 @@ class GenetikController extends Controller
         // Hapus jadwal sesuai mode
         if ($mode == 'replace_all') {
             Schedule::truncate();
-            \Log::info('Mode: RESET ALL');
+            \Log::info('Mode: RESET ALL - Semua jadwal dihapus');
         } elseif ($mode == 'replace_filter' && !empty($selectedClasses)) {
             Schedule::whereIn('rooms_id', $selectedClasses)->delete();
-            \Log::info('Mode: REPLACE FILTER - Kelas: ' . implode(',', $selectedClasses));
+            \Log::info('Mode: REPLACE FILTER - Hapus jadwal untuk kelas: ' . implode(',', $selectedClasses));
+        } elseif ($mode == 'append') {
+            \Log::info('Mode: APPEND - Menambah jadwal baru (tidak menghapus yang lama)');
         }
         
         $totalKromosomTarget = $input_kromosom * $input_generasi;
@@ -401,36 +407,15 @@ class GenetikController extends Controller
         ]);
         
         try {
-            // Loop per generasi untuk tracking progress
             $generate = new GenerateAlgoritma;
             
             if (!empty($selectedClasses)) {
                 $generate->setFilteredClasses($selectedClasses);
             }
             
-            // Proses bertahap dengan tracking
-            for ($gen = 1; $gen <= $input_generasi; $gen++) {
-                for ($kro = 1; $kro <= $input_kromosom; $kro++) {
-                    $currentKromosom = (($gen - 1) * $input_kromosom) + $kro;
-                    
-                    $this->saveProgress([
-                        'status' => 'processing',
-                        'progress' => round(($currentKromosom / $totalKromosomTarget) * 100),
-                        'message' => "Memproses kromosom {$currentKromosom} dari {$totalKromosomTarget}",
-                        'current_kromosom' => $currentKromosom,
-                        'total_kromosom' => $totalKromosomTarget,
-                        'total_jadwal' => Schedule::count(),
-                        'kromosom_stats' => $this->getKromosomStats($selectedClasses)
-                    ]);
-                    
-                    // Generate satu kromosom
-                    $generate->randKromosom(1, $count_teachs);
-                    $generate->checkPinalty();
-                    
-                    \Log::info("✅ Kromosom {$currentKromosom}/{$totalKromosomTarget} selesai");
-                    sleep(1); // Beri jeda agar frontend bisa catch up
-                }
-            }
+            // 🔥 PANGGIL SEKALI dengan total kromosom
+            $generate->randKromosom($totalKromosomTarget, $count_teachs, $mode);
+            $generate->checkPinalty();
             
             // Simpan setting akhir
             $total_gen = Setting::firstOrNew(['key' => 'total_gen']);
@@ -454,21 +439,29 @@ class GenetikController extends Controller
             
             return response()->json([
                 'success' => true,
-                'redirect' => route('admin.generates.result', 1)
+                'redirect' => route('admin.generates.result', 0)
             ]);
             
         } catch (\Exception $e) {
+            \Log::error("Generate gagal: " . $e->getMessage());
+            
+            // 🔥 KIRIM STATUS ERROR KE FRONTEND
             $this->saveProgress([
                 'status' => 'error',
                 'progress' => 0,
-                'message' => $e->getMessage(),
+                'message' => 'Generate GAGAL: ' . $e->getMessage(),
                 'current_kromosom' => 0,
                 'total_kromosom' => $totalKromosomTarget,
                 'total_jadwal' => Schedule::count(),
                 'kromosom_stats' => []
             ]);
             
-            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
+            // 🔥 PASTIKAN FRONTEND TAU BAHWA ADA ERROR
+            return response()->json([
+                'success' => false,
+                'error' => true,
+                'message' => $e->getMessage()
+            ], 500);
         }
     }
 
@@ -476,8 +469,7 @@ class GenetikController extends Controller
     private function saveProgress($data)
     {
         // Simpan ke cache (lebih cepat dari session untuk polling)
-        \Cache::put('generate_progress_' . auth()->id(), $data, 3600);
-        
+        $progress = \Cache::get('generate_progress_' . auth()->id());        
         // Juga simpan ke session sebagai backup
         session(['generate_progress' => $data]);
     }
@@ -678,3 +670,5 @@ class GenetikController extends Controller
     }
 
 }
+
+

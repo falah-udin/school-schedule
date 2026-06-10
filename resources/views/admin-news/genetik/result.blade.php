@@ -185,14 +185,32 @@
         </div>
     </div>
 
-    <!-- ==================== RINGKASAN KROMOSOM (GRID CARD) ==================== -->
+    <!-- ===================================== RINGKASAN KROMOSOM (GRID CARD) ==================== -->
+    @php
+        // Hitung target JP per kromosom secara dinamis
+        $rooms = App\Models\Room::all();
+        $targetJpPerKromosom = 0;
+        
+        foreach ($rooms as $room) {
+            $teachsForRoom = App\Models\Teach::where('class_room', $room->id)->with('course')->get();
+            $totalJpForRoom = 0;
+            foreach ($teachsForRoom as $teach) {
+                $totalJpForRoom += $teach->course->hours_per_week;
+            }
+            $targetJpPerKromosom += $totalJpForRoom;
+        }
+        
+        $jumlahKelas = $rooms->count();
+        $jpPerKelas = $jumlahKelas > 0 ? round($targetJpPerKromosom / $jumlahKelas) : 0;
+    @endphp
+
     @if(!empty($data_kromosom))
     <div class="summary-header no-print">
         <strong><i class="fa fa-chart-bar"></i> Pilih Kromosom:</strong>
         <div class="kromosom-grid">
             @foreach ($data_kromosom as $krom)
                 @php
-                    $totalSlots = 468;
+                    $totalSlots = $targetJpPerKromosom; 
                     $achieved = App\Models\Schedule::where('type', $krom['type'])->count();
                     $percentage = $totalSlots > 0 ? round(($achieved / $totalSlots) * 100) : 0;
                     $isActive = ($id == $krom['type']);
@@ -217,8 +235,12 @@
                 </a>
             @endforeach
         </div>
+
         <div class="mt-2 small text-muted">
-            <i class="fa fa-info-circle"></i> Target per kromosom: 468 JP (12 kelas × 39 JP) | Klik card untuk melihat jadwal kromosom tersebut
+            <i class="fa fa-info-circle"></i> 
+            Target per kromosom: <strong>{{ number_format($targetJpPerKromosom) }} JP</strong> 
+            ({{ $jumlahKelas }} kelas × {{ $jpPerKelas }} JP/kelas) 
+            | Klik card untuk melihat jadwal kromosom tersebut
         </div>
     </div>
     @endif
@@ -243,6 +265,331 @@
                 <strong><i class="fa fa-eye"></i> Tampilan:</strong>
                 <button id="btn-list" class="btn btn-sm btn-primary" onclick="toggleView()">📋 List</button>
                 <button id="btn-matrix" class="btn btn-sm btn-outline-info" onclick="toggleView()">📊 Matriks</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== CARD VALIDASI JADWAL (LENGKAP) ==================== -->
+    <div class="row no-print mb-4">
+        <div class="col-md-12">
+            <div class="card">
+                <div class="card-header bg-info text-white py-2">
+                    <h5 class="mb-0"><i class="fa fa-check-circle"></i> Validasi Jadwal</h5>
+                </div>
+                <div class="card-body p-3">
+                    @php
+                        $typeId = $id;
+                        
+                        // 🔥 AMBIL FILTER KELAS DARI URL
+                        $filterClass = request()->input('class');
+                        
+                        // 🔥 AMBIL DATA ROOM BERDASARKAN FILTER
+                        if (!empty($filterClass)) {
+                            $rooms = App\Models\Room::where('name', $filterClass)->get();
+                            $isFiltered = true;
+                        } else {
+                            $rooms = App\Models\Room::all();
+                            $isFiltered = false;
+                        }
+                        
+                        // HITUNG TARGET PER KELAS (HANYA YANG DIFILTER)
+                        $targetJpPerKromosom = 0;
+                        $classTargets = [];
+                        foreach ($rooms as $room) {
+                            $teachsForRoom = App\Models\Teach::where('class_room', $room->id)->with('course')->get();
+                            $totalJpForRoom = 0;
+                            foreach ($teachsForRoom as $teach) {
+                                $totalJpForRoom += $teach->course->hours_per_week;
+                            }
+                            $classTargets[$room->name] = $totalJpForRoom;
+                            $targetJpPerKromosom += $totalJpForRoom;
+                        }                     
+
+                        // 1. KAPASITAS KELAS (max 48 JP/minggu)
+                        $maxJpPerWeek = (App\Models\Setting::get('jp_per_day', 8)) * 6;
+                        $classViolations = [];
+                        foreach ($rooms as $room) {
+                            $totalJp = App\Models\Schedule::where('type', $typeId)->where('rooms_id', $room->id)->count();
+                            if ($totalJp > $maxJpPerWeek) {
+                                $classViolations[] = [
+                                    'class' => $room->name,
+                                    'actual' => $totalJp,
+                                    'target' => $classTargets[$room->name],
+                                    'max' => $maxJpPerWeek,
+                                    'excess' => $totalJp - $maxJpPerWeek
+                                ];
+                            }
+                        }
+                        
+                        // 2. REALITA PER KELAS
+                        $classReality = [];
+                        foreach ($rooms as $room) {
+                            $actualJp = App\Models\Schedule::where('type', $typeId)->where('rooms_id', $room->id)->count();
+                            $targetJp = $classTargets[$room->name];
+                            $percentage = $targetJp > 0 ? round(($actualJp / $targetJp) * 100) : 0;
+                            $classReality[] = [
+                                'class' => $room->name,
+                                'actual' => $actualJp,
+                                'target' => $targetJp,
+                                'percentage' => $percentage,
+                                'status' => $actualJp >= $targetJp ? 'success' : ($percentage >= 70 ? 'warning' : 'danger')
+                            ];
+                        }
+                        
+                        // 3. MAX & MIN JP PER HARI PER MAPEL
+                        $maxPerDayViolations = [];
+                        $minPerDayViolations = [];
+                        $teachs = App\Models\Teach::with('course')->get();
+                        foreach ($teachs as $teach) {
+                            $dailyCounts = App\Models\Schedule::where('type', $typeId)->where('teachs_id', $teach->id)
+                                ->select('days_id', \DB::raw('count(*) as total'))->groupBy('days_id')->get();
+                            foreach ($dailyCounts as $daily) {
+                                if ($daily->total > $teach->course->max_hours_per_day) {
+                                    $maxPerDayViolations[] = [
+                                        'course' => $teach->course->name,
+                                        'teacher' => $teach->lecturer->name,
+                                        'class' => $teach->room->name,
+                                        'day' => App\Models\Day::find($daily->days_id)->name_day,
+                                        'actual' => $daily->total,
+                                        'max' => $teach->course->max_hours_per_day
+                                    ];
+                                }
+                                if ($daily->total < $teach->course->min_hours_per_day && $daily->total > 0) {
+                                    $minPerDayViolations[] = [
+                                        'course' => $teach->course->name,
+                                        'teacher' => $teach->lecturer->name,
+                                        'class' => $teach->room->name,
+                                        'day' => App\Models\Day::find($daily->days_id)->name_day,
+                                        'actual' => $daily->total,
+                                        'min' => $teach->course->min_hours_per_day
+                                    ];
+                                }
+                            }
+                        }
+                        
+                        // 4. BENTROK GURU & KELAS
+                        $teacherConflicts = App\Models\Schedule::where('schedules.type', $typeId)
+                            ->join('teachs', 'teachs.id', '=', 'schedules.teachs_id')
+                            ->join('lecturers', 'lecturers.id', '=', 'teachs.lecturers_id')
+                            ->select('lecturers.name', 'schedules.days_id', 'schedules.times_id', \DB::raw('count(*) as total'))
+                            ->groupBy('lecturers.name', 'schedules.days_id', 'schedules.times_id')
+                            ->having('total', '>', 1)->get();
+                        
+                        $classConflicts = App\Models\Schedule::where('schedules.type', $typeId)
+                            ->join('rooms', 'rooms.id', '=', 'schedules.rooms_id')
+                            ->select('rooms.name', 'schedules.days_id', 'schedules.times_id', \DB::raw('count(*) as total'))
+                            ->groupBy('rooms.name', 'schedules.days_id', 'schedules.times_id')
+                            ->having('total', '>', 1)->get();
+                        
+                        // 5. GAP & OVERLAP
+                        $gapViolations = [];
+                        $schedulesByClass = App\Models\Schedule::where('type', $typeId)->with(['teach.course', 'day', 'time', 'room'])->get()->groupBy('rooms_id');
+                        foreach ($schedulesByClass as $roomId => $schedules) {
+                            $roomName = $schedules->first()->room->name ?? '?';
+                            foreach ($schedules->groupBy('days_id') as $dayId => $daySchedules) {
+                                $sorted = $daySchedules->sortBy(fn($s) => $s->time->time_begin ?? '00:00');
+                                $prev = null;
+                                foreach ($sorted as $curr) {
+                                    if ($prev && $curr->time) {
+                                        $gap = (strtotime($curr->time->time_begin) - strtotime($prev->time->time_end)) / 60;
+                                        if ($gap < 0) {
+                                            $gapViolations[] = "🔴 OVERLAP di {$roomName} (Hari " . ($curr->day->name_day ?? '?') . "): {$prev->teach->course->name} & {$curr->teach->course->name}";
+                                        } elseif ($gap > 0 && $gap < 15) {
+                                            $gapViolations[] = "⏱️ Jeda pendek ({$gap} menit) di {$roomName}: {$prev->teach->course->name} → {$curr->teach->course->name}";
+                                        }
+                                    }
+                                    $prev = $curr;
+                                }
+                            }
+                        }
+                        
+                        // HITUNG TOTAL
+                        $totalViolations = count($classViolations) + count($maxPerDayViolations) + count($minPerDayViolations) + 
+                                        $teacherConflicts->count() + $classConflicts->count() + count($gapViolations);
+                        $totalSchedules = App\Models\Schedule::where('type', $typeId)->count();
+                        $completionRate = $targetJpPerKromosom > 0 ? round(($totalSchedules / $targetJpPerKromosom) * 100) : 0;
+                        
+                        $statusColor = $totalViolations == 0 ? 'success' : ($totalViolations < 10 ? 'warning' : 'danger');
+                        $statusText = $totalViolations == 0 ? 'Sempurna' : ($totalViolations < 10 ? 'Perlu Perbaikan' : 'Banyak Pelanggaran');
+                        
+                        // HITUNG SUGESTI
+                        $missingJp = $targetJpPerKromosom - $totalSchedules;
+                        $affectedClasses = count(array_filter($classReality, fn($c) => $c['percentage'] < 100));
+                    @endphp
+                    
+                    <!-- RINGKASAN 4 KARTU -->
+                    <div class="row text-center mb-3">
+                        <div class="col-3">
+                            <div class="p-2 border rounded bg-{{ $statusColor }}-light">
+                                <h3 class="mb-0 text-{{ $statusColor }}">{{ $completionRate }}%</h3>
+                                <small>Kelengkapan</small>
+                            </div>
+                        </div>
+                        <div class="col-3">
+                            <div class="p-2 border rounded">
+                                <h3 class="mb-0 text-info">{{ $totalSchedules }}/{{ $targetJpPerKromosom }}</h3>
+                                <small>Total JP</small>
+                                @if($isFiltered)
+                                    <div class="small text-muted">(Kelas: {{ $filterClass }})</div>
+                                @endif
+                            </div>
+                        </div>
+                        <div class="col-3">
+                            <div class="p-2 border rounded">
+                                <h3 class="mb-0 text-{{ $totalViolations == 0 ? 'success' : 'danger' }}">{{ $totalViolations }}</h3>
+                                <small>Pelanggaran</small>
+                            </div>
+                        </div>
+                        <div class="col-3">
+                            <div class="p-2 border rounded bg-{{ $statusColor }}-light">
+                                <h3 class="mb-0 text-{{ $statusColor }}">{{ $statusText }}</h3>
+                                <small>Status</small>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- REALITA PER KELAS -->
+                    <div class="mb-3">
+                        <strong>
+                            <i class="fa fa-chart-line"></i> 
+                            Realita per Kelas
+                            @if($isFiltered)
+                                <span class="badge badge-info">Filter: {{ $filterClass }}</span>
+                            @endif
+                        </strong>
+                        <div class="table-responsive mt-2">
+                            <table class="table table-sm table-bordered">
+                                <thead class="bg-light">
+                                    <tr>
+                                        <th>Kelas</th>
+                                        <th>Target JP</th>
+                                        <th>Terisi</th>
+                                        <th>Persentase</th>
+                                        <th>Kurang</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @forelse($classReality as $cr)
+                                    <tr>
+                                        <td><strong>{{ $cr['class'] }}</strong></td>
+                                        <td>{{ $cr['target'] }}</td>
+                                        <td>{{ $cr['actual'] }}</td>
+                                        <td class="text-{{ $cr['status'] == 'success' ? 'success' : ($cr['status'] == 'warning' ? 'warning' : 'danger') }}">
+                                            {{ $cr['percentage'] }}%
+                                        </td>
+                                        <td class="text-danger">{{ $cr['target'] - $cr['actual'] }}</td>
+                                    </tr>
+                                    @empty
+                                    <tr>
+                                        <td colspan="5" class="text-center">Tidak ada data kelas</td>
+                                    </tr>
+                                    @endforelse
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    
+                    <!-- SARAN PERBAIKAN (BARU) -->
+                    @if($missingJp > 0)
+                    <div class="alert alert-warning mb-3 py-2">
+                        <i class="fa fa-lightbulb-o"></i> 
+                        <strong>Rekomendasi Perbaikan:</strong>
+                        <ul class="mb-0 mt-1">
+                            <li>📊 Masih kurang <strong>{{ $missingJp }} JP</strong> dari target {{ $targetJpPerKromosom }} JP</li>
+                            <li>🏫 {{ $affectedClasses }} kelas belum mencapai target ({{ implode(', ', array_map(fn($c) => $c['class'], array_filter($classReality, fn($c) => $c['percentage'] < 100))) }})</li>
+                            @if(count($minPerDayViolations) > 0)
+                            <li>⚠️ {{ count($minPerDayViolations) }} mapel belum memenuhi minimal JP per hari</li>
+                            @endif
+                            @if($teacherConflicts->count() > 0)
+                            <li>👨‍🏫 Ada bentrok jadwal guru, coba generate ulang dengan parameter berbeda</li>
+                            @endif
+                            <li>💡 Coba tingkatkan nilai <strong>Crossover (0.7-0.9)</strong> atau <strong>Mutasi (0.3-0.5)</strong></li>
+                        </ul>
+                    </div>
+                    @endif
+                    
+                    <!-- DETAIL PELANGGARAN -->
+                    @if($totalViolations > 0)
+                    <div class="small">
+                        <button class="btn btn-sm btn-outline-danger mb-2" type="button" data-toggle="collapse" data-target="#detailViolations">
+                            <i class="fa fa-exclamation-triangle"></i> Detail Pelanggaran ({{ $totalViolations }})
+                        </button>
+                        <div id="detailViolations" class="collapse">
+                            <div class="row">
+                                <div class="col-md-6">
+                                    @if(count($classViolations) > 0)
+                                    <div class="mb-2">
+                                        <strong class="text-danger">📊 Kelas Melebihi Kapasitas:</strong>
+                                        <ul class="mb-0 pl-3">
+                                            @foreach($classViolations as $v)
+                                            <li>{{ $v['class'] }}: {{ $v['actual'] }}/{{ $v['max'] }} JP (kelebihan {{ $v['excess'] }} JP)</li>
+                                            @endforeach
+                                        </ul>
+                                    </div>@endif
+                                    
+                                    @if(count($maxPerDayViolations) > 0)
+                                    <div class="mb-2">
+                                        <strong class="text-danger">⚠️ Melebihi Max/Hari ({{ count($maxPerDayViolations) }}):</strong>
+                                        <ul class="mb-0 pl-3">
+                                            @foreach(array_slice($maxPerDayViolations,0,5) as $v)
+                                            <li>{{ $v['course'] }} ({{ $v['class'] }}, {{ $v['day'] }}): {{ $v['actual'] }}/{{ $v['max'] }} JP</li>
+                                            @endforeach
+                                            @if(count($maxPerDayViolations) > 5) +{{ count($maxPerDayViolations)-5 }} lagi @endif
+                                        </ul>
+                                    </div>@endif
+                                    
+                                    @if($teacherConflicts->count() > 0)
+                                    <div class="mb-2">
+                                        <strong class="text-danger">👨‍🏫 Bentrok Guru ({{ $teacherConflicts->count() }}):</strong>
+                                        <ul class="mb-0 pl-3">
+                                            @foreach($teacherConflicts as $c)
+                                            <li>{{ $c->name }} ({{ App\Models\Day::find($c->days_id)->name_day }})</li>
+                                            @endforeach
+                                        </ul>
+                                    </div>@endif
+                                </div>
+                                <div class="col-md-6">
+                                    @if(count($minPerDayViolations) > 0)
+                                    <div class="mb-2">
+                                        <strong class="text-warning">⚠️ Kurang dari Min/Hari ({{ count($minPerDayViolations) }}):</strong>
+                                        <ul class="mb-0 pl-3">
+                                            @foreach(array_slice($minPerDayViolations,0,5) as $v)
+                                            <li>{{ $v['course'] }} ({{ $v['class'] }}, {{ $v['day'] }}): {{ $v['actual'] }}/{{ $v['min'] }} JP</li>
+                                            @endforeach
+                                            @if(count($minPerDayViolations) > 5) +{{ count($minPerDayViolations)-5 }} lagi @endif
+                                        </ul>
+                                    </div>@endif
+                                    
+                                    @if($classConflicts->count() > 0)
+                                    <div class="mb-2">
+                                        <strong class="text-danger">🏫 Bentrok Kelas ({{ $classConflicts->count() }}):</strong>
+                                        <ul class="mb-0 pl-3">
+                                            @foreach($classConflicts as $c)
+                                            <li>{{ $c->name }} ({{ App\Models\Day::find($c->days_id)->name_day }})</li>
+                                            @endforeach
+                                        </ul>
+                                    </div>@endif
+                                    
+                                    @if(count($gapViolations) > 0)
+                                    <div class="mb-2">
+                                        <strong class="text-warning">⏱️ Gap/Overlap ({{ count($gapViolations) }}):</strong>
+                                        <ul class="mb-0 pl-3">
+                                            @foreach(array_slice($gapViolations,0,3) as $v)
+                                            <li>{{ $v }}</li>
+                                            @endforeach
+                                            @if(count($gapViolations) > 3) +{{ count($gapViolations)-3 }} lagi @endif
+                                        </ul>
+                                    </div>@endif
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    @else
+                    <div class="alert alert-success mb-0 py-2 text-center">
+                        <i class="fa fa-check-circle"></i> <strong>Validasi Sempurna!</strong> Tidak ada pelanggaran. Jadwal sudah optimal!
+                    </div>
+                    @endif
+                </div>
             </div>
         </div>
     </div>
@@ -302,9 +649,10 @@
                         </tr>
                     </thead>
                     <tbody>
-                        @foreach($schedules as $key => $s)
+                        @php $counter = 1; @endphp
+                        @foreach($schedules as $s)
                         <tr>
-                            <td>{{ $key + 1 + ($schedules->currentPage() - 1) * $schedules->perPage() }}</td>
+                            <td>{{ $counter++ }}</td>
                             <td><span class="badge badge-info">{{ $s->day->name_day ?? '-' }}</span></td>
                             <td>{{ $s->time->range ?? '-' }}</td>
                             <td><strong>{{ $s->room->name ?? '-' }}</strong></td>
@@ -315,9 +663,11 @@
                     </tbody>
                 </table>
             </div>
+            @if(method_exists($schedules, 'links'))
             <div class="text-center mt-3">
-                {!! $schedules->appends(Input::all())->render() !!}
+                {!! $schedules->links() !!}
             </div>
+            @endif
         </div>
         <div id="matrix-view" style="display: none;">
             <div class="alert alert-info">Tampilan matriks hanya tersedia untuk 1 kelas. Silakan pilih kelas terlebih dahulu.</div>
