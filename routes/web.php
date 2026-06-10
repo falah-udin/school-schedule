@@ -116,13 +116,22 @@ Route::group(['namespace' => 'Admin'], function ()
         Route::get('generates', ['as' => 'admin.generates', 'uses' => 'GenetikController@index']);
         Route::get('generates/submit', ['as' => 'admin.generates.submit', 'uses' => 'GenetikController@submit']);
         Route::get('generates/result/{id}', ['as' => 'admin.generates.result', 'uses' => 'GenetikController@result']);
-        Route::get('generates/delete/{id}', ['as' => 'admin.generates.delete', 'uses' => 'GenetikController@delete']); // TAMBAHKAN INI
+        Route::get('generates/delete/{id}', ['as' => 'admin.generates.delete', 'uses' => 'GenetikController@delete']);
         Route::get('generates/excel/{id}', ['as' => 'admin.generates.excel', 'uses' => 'GenetikController@excel']);
         Route::get('generates/showClasses/{id}', ['as' => 'admin.generates.classes', 'uses' => 'GenetikController@showClasses']);
         Route::get('generates/filterTeacher/{id}', ['as' => 'admin.generates.filterTeacher', 'uses' => 'GenetikController@showTeacherSearch']);
         Route::get('generates/filterClasses/{id}', ['as' => 'admin.generates.filterClass', 'uses' => 'GenetikController@showClassesSearch']);
 
-        Route::post('generates/submit-ajax', ['as' => 'admin.generates.submit.ajax', 'uses' => 'GenetikController@submitAjax']);
+        // ⚠️ HAPUS YANG INI (duplikasi dengan yang di bawah):
+        // Route::post('generates/submit-ajax', ['as' => 'admin.generates.submit.ajax', 'uses' => 'GenetikController@submitAjax']);
+        // Route::get('generates/check', ['as' => 'admin.generates.check', 'uses' => 'GenetikController@checkSchedule']);
+
+        // ✅ GUNAKAN YANG INI SAJA (sudah pakai GET, bukan POST):
+        Route::get('generates/submit-ajax', ['as' => 'admin.generates.submit.ajax', 'uses' => 'GenetikController@submitAjaxProgress']);
+        Route::get('generates/check-progress', ['as' => 'admin.generates.check-progress', 'uses' => 'GenetikController@checkProgress']);
+        Route::get('generates/result-data', ['as' => 'admin.generates.result-data', 'uses' => 'GenetikController@getResultData']);
+
+        // Backup route check lama (optional, biar tidak error 404)
         Route::get('generates/check', ['as' => 'admin.generates.check', 'uses' => 'GenetikController@checkSchedule']);
 
     });

@@ -65,10 +65,55 @@
         border-radius: 12px;
         font-size: 10px;
     }
-    @media print {
-        .no-print, .class-nav, .btn, .alert, .page-breadcrumb {
-            display: none !important;
-        }
+    
+    /* Style untuk ringkasan kromosom - GRID CARD */
+    .kromosom-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+        gap: 10px;
+        margin-top: 10px;
+    }
+    .kromosom-card {
+        background: white;
+        border-radius: 10px;
+        padding: 10px;
+        text-align: center;
+        cursor: pointer;
+        transition: all 0.2s;
+        border: 2px solid transparent;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    .kromosom-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+    }
+    .kromosom-card.active {
+        border-color: #17a2b8;
+        background: #e6f7ff;
+    }
+    .kromosom-card .number {
+        font-size: 14px;
+        font-weight: bold;
+        color: #333;
+    }
+    .kromosom-card .stats {
+        font-size: 18px;
+        font-weight: bold;
+        margin: 5px 0;
+    }
+    .kromosom-card .percentage {
+        font-size: 11px;
+    }
+    .kromosom-card.success { border-top: 3px solid #28a745; }
+    .kromosom-card.warning { border-top: 3px solid #ffc107; }
+    .kromosom-card.danger { border-top: 3px solid #dc3545; }
+    
+    .summary-header {
+        background: #f0f7ff;
+        border-radius: 10px;
+        padding: 12px 20px;
+        margin-bottom: 15px;
+        border-left: 4px solid #17a2b8;
     }
 </style>
 @stop
@@ -140,19 +185,40 @@
         </div>
     </div>
 
-    <!-- Pilih Kromosom -->
+    <!-- ==================== RINGKASAN KROMOSOM (GRID CARD) ==================== -->
     @if(!empty($data_kromosom))
-    <div class="row mb-3 no-print">
-        <div class="col-md-12 text-center">
-            <div class="btn-group">
-                @foreach ($data_kromosom as $krom)
-                    <a href="{{ route('admin.generates.result', $krom['type']) }}" 
-                    class="btn @if ($id == $krom['type']) btn-primary @else btn-outline-info @endif">
-                        @if ($krom['value_schedules'] == 1) 🌟 @endif 
-                        Kromosom {{ $krom['type'] }}
-                    </a>
-                @endforeach
-            </div>
+    <div class="summary-header no-print">
+        <strong><i class="fa fa-chart-bar"></i> Pilih Kromosom:</strong>
+        <div class="kromosom-grid">
+            @foreach ($data_kromosom as $krom)
+                @php
+                    $totalSlots = 468;
+                    $achieved = App\Models\Schedule::where('type', $krom['type'])->count();
+                    $percentage = $totalSlots > 0 ? round(($achieved / $totalSlots) * 100) : 0;
+                    $isActive = ($id == $krom['type']);
+                    
+                    if ($achieved >= $totalSlots) {
+                        $statusClass = 'success';
+                        $icon = '✅';
+                    } elseif ($achieved >= $totalSlots * 0.7) {
+                        $statusClass = 'warning';
+                        $icon = '⚠️';
+                    } else {
+                        $statusClass = 'danger';
+                        $icon = '❌';
+                    }
+                @endphp
+                <a href="{{ route('admin.generates.result', $krom['type']) }}" style="text-decoration: none;">
+                    <div class="kromosom-card {{ $statusClass }} {{ $isActive ? 'active' : '' }}">
+                        <div class="number">Kromosom {{ $krom['type'] }}</div>
+                        <div class="stats">{{ $achieved }}/{{ $totalSlots }}</div>
+                        <div class="percentage">{{ $icon }} {{ $percentage }}%</div>
+                    </div>
+                </a>
+            @endforeach
+        </div>
+        <div class="mt-2 small text-muted">
+            <i class="fa fa-info-circle"></i> Target per kromosom: 468 JP (12 kelas × 39 JP) | Klik card untuk melihat jadwal kromosom tersebut
         </div>
     </div>
     @endif
@@ -211,7 +277,7 @@
                                     @endif
                                 </td>
                             @endforeach
-                        </tr>
+                        <tr>
                         @endforeach
                     </tbody>
                 </table>

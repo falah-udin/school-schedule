@@ -362,74 +362,235 @@ class GenetikController extends Controller
         return view('admin.genetik.filterClass', compact('lecturer','schedules','rooms','times','days','teachs')); 
     }
 
+    // Tambahkan property untuk menyimpan progress
     private $generateProgress = [];
 
-    public function submitAjax(Request $request)
+    public function submitAjaxProgress(Request $request)
     {
-        set_time_limit(300);
-        ini_set('memory_limit', '512M');
+        set_time_limit(3600);
+        ini_set('memory_limit', '1024M');
         
-        $this->generateProgress = [
+        $mode = $request->input('mode', 'append');
+        $selectedClasses = $request->input('classes', []);
+        $input_kromosom = (int)$request->input('kromosom', 1);
+        $input_generasi = (int)$request->input('generasi', 1);
+        $input_crossover = (float)$request->input('crossover', 0.5);
+        $input_mutasi = (float)$request->input('mutasi', 0.2);
+        
+        // Hapus jadwal sesuai mode
+        if ($mode == 'replace_all') {
+            Schedule::truncate();
+            \Log::info('Mode: RESET ALL');
+        } elseif ($mode == 'replace_filter' && !empty($selectedClasses)) {
+            Schedule::whereIn('rooms_id', $selectedClasses)->delete();
+            \Log::info('Mode: REPLACE FILTER - Kelas: ' . implode(',', $selectedClasses));
+        }
+        
+        $totalKromosomTarget = $input_kromosom * $input_generasi;
+        $count_teachs = Teach::count();
+        
+        // Inisialisasi progress
+        $this->saveProgress([
             'status' => 'processing',
             'progress' => 0,
             'message' => 'Memulai generate...',
-            'last_log' => ''
-        ];
-        
-        // Simpan progress ke session atau cache
-        session(['generate_progress' => $this->generateProgress]);
-        
-        // Proses generate di background (gunakan queue atau exec)
-        // Sementara kita proses langsung
-        
-        $input_kromosom = $request->input('kromosom');
-        $input_generasi = $request->input('generasi');
-        $input_crossover = $request->input('crossover');
-        $input_mutasi = $request->input('mutasi');
-        
-        $count_teachs = Teach::count();
-        $kromosom = $input_kromosom * $input_generasi;
-        $crossover = $input_kromosom * $input_crossover;
-        
-        $generate = new GenerateAlgoritma;
+            'current_kromosom' => 0,
+            'total_kromosom' => $totalKromosomTarget,
+            'total_jadwal' => 0,
+            'kromosom_stats' => []
+        ]);
         
         try {
-            $generate->randKromosom($kromosom, $count_teachs);
-            $generate->checkPinalty();
+            // Loop per generasi untuk tracking progress
+            $generate = new GenerateAlgoritma;
             
+            if (!empty($selectedClasses)) {
+                $generate->setFilteredClasses($selectedClasses);
+            }
+            
+            // Proses bertahap dengan tracking
+            for ($gen = 1; $gen <= $input_generasi; $gen++) {
+                for ($kro = 1; $kro <= $input_kromosom; $kro++) {
+                    $currentKromosom = (($gen - 1) * $input_kromosom) + $kro;
+                    
+                    $this->saveProgress([
+                        'status' => 'processing',
+                        'progress' => round(($currentKromosom / $totalKromosomTarget) * 100),
+                        'message' => "Memproses kromosom {$currentKromosom} dari {$totalKromosomTarget}",
+                        'current_kromosom' => $currentKromosom,
+                        'total_kromosom' => $totalKromosomTarget,
+                        'total_jadwal' => Schedule::count(),
+                        'kromosom_stats' => $this->getKromosomStats($selectedClasses)
+                    ]);
+                    
+                    // Generate satu kromosom
+                    $generate->randKromosom(1, $count_teachs);
+                    $generate->checkPinalty();
+                    
+                    \Log::info("✅ Kromosom {$currentKromosom}/{$totalKromosomTarget} selesai");
+                    sleep(1); // Beri jeda agar frontend bisa catch up
+                }
+            }
+            
+            // Simpan setting akhir
             $total_gen = Setting::firstOrNew(['key' => 'total_gen']);
-            $total_gen->name = 'Total Gen';
-            $total_gen->value = $crossover;
+            $total_gen->value = $input_kromosom * $input_crossover;
             $total_gen->save();
             
             $mutasi_setting = Setting::firstOrNew(['key' => 'mutasi']);
-            $mutasi_setting->name = 'Mutasi';
             $mutasi_setting->value = (3 * $count_teachs) * $input_kromosom * $input_mutasi;
             $mutasi_setting->save();
             
-            $firstType = Schedule::select('type')->first()->type ?? 1;
-            
-            $this->generateProgress = [
+            // Progress selesai
+            $this->saveProgress([
                 'status' => 'completed',
                 'progress' => 100,
                 'message' => 'Generate selesai!',
-                'last_log' => 'Proses generate berhasil'
-            ];
-            session(['generate_progress' => $this->generateProgress]);
+                'current_kromosom' => $totalKromosomTarget,
+                'total_kromosom' => $totalKromosomTarget,
+                'total_jadwal' => Schedule::count(),
+                'kromosom_stats' => $this->getKromosomStats($selectedClasses)
+            ]);
             
-            return response()->json(['success' => true, 'total' => Schedule::count(), 'firstType' => $firstType]);
+            return response()->json([
+                'success' => true,
+                'redirect' => route('admin.generates.result', 1)
+            ]);
             
         } catch (\Exception $e) {
-            $this->generateProgress = [
+            $this->saveProgress([
                 'status' => 'error',
                 'progress' => 0,
                 'message' => $e->getMessage(),
-                'last_log' => $e->getMessage()
-            ];
-            session(['generate_progress' => $this->generateProgress]);
+                'current_kromosom' => 0,
+                'total_kromosom' => $totalKromosomTarget,
+                'total_jadwal' => Schedule::count(),
+                'kromosom_stats' => []
+            ]);
             
             return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
         }
+    }
+
+    // Method untuk menyimpan progress (gunakan cache atau file)
+    private function saveProgress($data)
+    {
+        // Simpan ke cache (lebih cepat dari session untuk polling)
+        \Cache::put('generate_progress_' . auth()->id(), $data, 3600);
+        
+        // Juga simpan ke session sebagai backup
+        session(['generate_progress' => $data]);
+    }
+
+    // Method untuk cek progress (panggil dari frontend)
+    public function checkProgress()
+    {
+        $progress = \Cache::get('generate_progress_' . auth()->id());
+        
+        if (!$progress) {
+            // Jika tidak ada progress, ambil dari database
+            $selectedClasses = session('selected_classes', []);
+            $stats = $this->getKromosomStats($selectedClasses);
+            $totalKromosom = count($stats);
+            $completedKromosom = count(array_filter($stats, function($s) {
+                return $s['count'] >= $s['target'];
+            }));
+            
+            $progress = [
+                'status' => $totalKromosom > 0 && $completedKromosom >= $totalKromosom ? 'completed' : 'idle',
+                'progress' => $totalKromosom > 0 ? round(($completedKromosom / $totalKromosom) * 100) : 0,
+                'message' => $totalKromosom > 0 ? "Selesai {$completedKromosom}/{$totalKromosom} kromosom" : 'Belum ada generate',
+                'current_kromosom' => $completedKromosom,
+                'total_kromosom' => $totalKromosom,
+                'total_jadwal' => Schedule::count(),
+                'kromosom_stats' => $stats
+            ];
+        }
+        
+        return response()->json($progress);
+    }
+
+    // Method untuk mengambil statistik kromosom
+    private function getKromosomStats($selectedClasses = [])
+    {
+        // Hitung target per kromosom berdasarkan kelas yang dipilih
+        $teachsQuery = Teach::with('course');
+        if (!empty($selectedClasses)) {
+            $teachsQuery->whereIn('class_room', $selectedClasses);
+        }
+        
+        $targetPerKromosom = 0;
+        foreach ($teachsQuery->get() as $teach) {
+            $targetPerKromosom += $teach->course->hours_per_week;
+        }
+        
+        if ($targetPerKromosom == 0) {
+            $targetPerKromosom = 468; // default
+        }
+        
+        // Ambil semua type kromosom
+        $kromosomTypes = Schedule::select('type')
+            ->groupBy('type')
+            ->orderBy('type', 'asc')
+            ->get();
+        
+        $stats = [];
+        foreach ($kromosomTypes as $type) {
+            $count = Schedule::where('type', $type->type)->count();
+            $stats[] = [
+                'type' => $type->type,
+                'count' => $count,
+                'target' => $targetPerKromosom,
+                'percentage' => $targetPerKromosom > 0 ? round(($count / $targetPerKromosom) * 100) : 0
+            ];
+        }
+        
+        return $stats;
+    }
+
+    // Method untuk mengambil data hasil akhir
+    public function getResultData()
+    {
+        $selectedClasses = session('selected_classes', []);
+        
+        $teachsQuery = Teach::with('course');
+        if (!empty($selectedClasses)) {
+            $teachsQuery->whereIn('class_room', $selectedClasses);
+        }
+        
+        $targetPerKromosom = 0;
+        foreach ($teachsQuery->get() as $teach) {
+            $targetPerKromosom += $teach->course->hours_per_week;
+        }
+        
+        if ($targetPerKromosom == 0) {
+            $targetPerKromosom = 468;
+        }
+        
+        $kromosomTypes = Schedule::select('type')
+            ->groupBy('type')
+            ->orderBy('type', 'asc')
+            ->get();
+        
+        $kromosomStats = [];
+        $totalJadwal = 0;
+        
+        foreach ($kromosomTypes as $type) {
+            $count = Schedule::where('type', $type->type)->count();
+            $totalJadwal += $count;
+            $kromosomStats[] = [
+                'type' => $type->type,
+                'count' => $count,
+                'target' => $targetPerKromosom,
+                'percentage' => $targetPerKromosom > 0 ? round(($count / $targetPerKromosom) * 100) : 0
+            ];
+        }
+        
+        return response()->json([
+            'total' => $totalJadwal,
+            'target_per_kromosom' => $targetPerKromosom,
+            'kromosom_stats' => $kromosomStats
+        ]);
     }
 
     public function getStatus()

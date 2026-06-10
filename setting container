@@ -2,3 +2,13 @@ docker exec -it school-master-php sh
 
 
 docker restart school-master-php
+
+
+# Stop semua container
+docker stop $(docker ps -aq)
+
+# Restart docker service
+sudo systemctl restart docker
+
+# Start semua container
+docker start $(docker ps -aq)

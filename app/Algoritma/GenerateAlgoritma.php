@@ -14,16 +14,21 @@ class GenerateAlgoritma
     private $scheduledHours = [];
     private $dailyCount = [];
     private $classDailyCount = [];
-    
+    private $filteredClasses = [];
+    private $minFulfilled = []; // Track apakah min per hari sudah terpenuhi
+
+    public function setFilteredClasses($classes)
+    {
+        $this->filteredClasses = $classes;
+    }
+
     /**
      * Cek apakah total JP per kelas melebihi kapasitas
-     * @return array ['status' => bool, 'message' => string, 'details' => array]
      */
     public function checkIfPossible()
     {
         $rooms = Room::all();
         
-        // Jika ada filter kelas, hanya cek kelas yang difilter
         if (!empty($this->filteredClasses)) {
             $rooms = Room::whereIn('id', $this->filteredClasses)->get();
         }
@@ -61,7 +66,10 @@ class GenerateAlgoritma
         ];
     }
 
-    public function randomingProcess($type, $maxAttempts = 1000)
+    /**
+     * Proses random jadwal dengan validasi KETAT
+     */
+    public function randomingProcess($type, $maxAttempts = 2000)
     {
         $teach = $this->getUnscheduledTeach($type);
         
@@ -69,35 +77,75 @@ class GenerateAlgoritma
             return null;
         }
         
+        $course = $teach->course;
         $attempt = 0;
         
         while ($attempt < $maxAttempts) {
             $day = Day::inRandomOrder()->first();
-            $time = Time::inRandomOrder()->first();
-            $course = $teach->course;
             
-            // 1. Cek target JP per minggu
-            $currentWeekHours = $this->getScheduledHours($type, $teach->id);
-            if ($currentWeekHours >= $course->hours_per_week) {
-                return null;
-            }
-            
-            // 2. Cek max JP per hari
             $currentDayHours = $this->getDailyHours($type, $teach->id, $day->id);
+            $remainingNeeded = $course->hours_per_week - $this->getScheduledHours($type, $teach->id);
+            
+            // Jika sudah mencapai max per hari, skip
             if ($currentDayHours >= $course->max_hours_per_day) {
                 $attempt++;
                 continue;
             }
             
-            // 3. Cek kepadatan kelas per hari
-            $classDayHours = $this->getClassDailyHours($type, $teach->class_room, $day->id);
-            $maxJpPerDay = \App\Models\Setting::get('jp_per_day', 8);
-            if ($classDayHours >= $maxJpPerDay) {
+            // Jika sudah mencapai target mingguan, stop
+            if ($this->getScheduledHours($type, $teach->id) >= $course->hours_per_week) {
+                return null;
+            }
+            
+            $time = null;
+            
+            // 🔥 CEK: Apakah sudah ada jadwal di hari ini?
+            $existingInDay = Schedule::where('type', $type)
+                ->where('teachs_id', $teach->id)
+                ->where('days_id', $day->id)
+                ->exists();
+            
+            if ($existingInDay) {
+                // Jika sudah ada, cari slot LANGSUNG setelah slot terakhir
+                $lastSlot = Schedule::where('type', $type)
+                    ->where('teachs_id', $teach->id)
+                    ->where('days_id', $day->id)
+                    ->orderBy('times_id', 'desc')
+                    ->first();
+                
+                if ($lastSlot) {
+                    $nextSlot = Time::where('id', '>', $lastSlot->times_id)
+                        ->orderBy('time_begin')
+                        ->first();
+                    
+                    if ($nextSlot) {
+                        $time = $nextSlot;
+                    }
+                }
+            }
+            
+            // Jika tidak ada jadwal sebelumnya atau slot berikutnya tidak tersedia, cari slot dari awal
+            if (!$time) {
+                // Jika ini JP pertama di hari ini, cari slot dari awal
+                if ($currentDayHours == 0 && $remainingNeeded >= $course->min_hours_per_day) {
+                    $consecutiveSlots = $this->getConsecutiveAvailableSlotsFromStart($type, $teach, $day, $course->min_hours_per_day);
+                    if ($consecutiveSlots) {
+                        $time = $consecutiveSlots[0];
+                    }
+                }
+            }
+            
+            // Jika masih belum dapat slot, coba random
+            if (!$time) {
+                $time = Time::inRandomOrder()->first();
+            }
+            
+            if (!$time) {
                 $attempt++;
                 continue;
             }
             
-            // 4. Cek bentrok guru
+            // 6. Cek bentrok guru
             $check_lecturers_id = Schedule::join('teachs', 'teachs.id', '=', 'schedules.teachs_id')
                 ->join('lecturers', 'lecturers.id', '=', 'teachs.lecturers_id')
                 ->where('lecturers_id', $teach->lecturers_id)
@@ -106,14 +154,14 @@ class GenerateAlgoritma
                 ->where('type', $type)
                 ->first();
             
-            // 5. Cek bentrok kelas
+            // 7. Cek bentrok kelas
             $check_class_id = Schedule::where('rooms_id', $teach->class_room)
                 ->where('days_id', $day->id)
                 ->where('times_id', $time->id)
                 ->where('type', $type)
                 ->first();
             
-            // 6. Cek waktu tidak available
+            // 8. Cek waktu tidak available
             $check_timenotavailable = Timenotavailable::where('lecturers_id', $teach->lecturers_id)
                 ->where('days_id', $day->id)
                 ->where('times_id', $time->id)
@@ -143,14 +191,22 @@ class GenerateAlgoritma
         return null;
     }
     
-    private $filteredClasses = [];
-
-    public function setFilteredClasses($classes)
+    /**
+     * Hitung sisa hari yang tersedia untuk teach
+     */
+    private function getRemainingDays($type, $teachId)
     {
-        $this->filteredClasses = $classes;
+        $usedDays = Schedule::where('type', $type)
+            ->where('teachs_id', $teachId)
+            ->groupBy('days_id')
+            ->count();
+        
+        return 6 - $usedDays;
     }
-
-    // Di getUnscheduledTeach, filter berdasarkan kelas
+    
+    /**
+     * Ambil teach yang masih kurang jamnya (prioritas: yang hampir selesai)
+     */
     private function getUnscheduledTeach($type)
     {
         $teachs = Teach::with('course');
@@ -176,6 +232,78 @@ class GenerateAlgoritma
         
         return $bestTeach;
     }
+    
+    /**
+     * Validasi MIN per hari dan perbaiki jadwal
+     */
+    public function validateAndFixMinHours($type)
+    {
+        $violations = [];
+        $teachs = Teach::with('course')->get();
+        
+        foreach ($teachs as $teach) {
+            $course = $teach->course;
+            
+            // Ambil jadwal per hari
+            $dailySchedules = Schedule::where('type', $type)
+                ->where('teachs_id', $teach->id)
+                ->select('days_id', DB::raw('count(*) as total'))
+                ->groupBy('days_id')
+                ->get();
+            
+            foreach ($dailySchedules as $sch) {
+                if ($sch->total < $course->min_hours_per_day) {
+                    $violations[] = [
+                        'teach_id' => $teach->id,
+                        'course' => $course->name,
+                        'teacher' => $teach->lecturer->name,
+                        'class' => $teach->room->name,
+                        'day_id' => $sch->days_id,
+                        'day' => Day::find($sch->days_id)->name_day,
+                        'actual' => $sch->total,
+                        'required' => $course->min_hours_per_day
+                    ];
+                }
+            }
+        }
+        
+        return $violations;
+    }
+    
+    /**
+     * Perbaiki jadwal yang melanggar MIN per hari
+     */
+    public function repairMinHours($type)
+    {
+        $violations = $this->validateAndFixMinHours($type);
+        $maxRepairs = 100;
+        $repairCount = 0;
+        
+        while (!empty($violations) && $repairCount < $maxRepairs) {
+            foreach ($violations as $v) {
+                // Hapus jadwal yang melanggar di hari itu
+                Schedule::where('type', $type)
+                    ->where('teachs_id', $v['teach_id'])
+                    ->where('days_id', $v['day_id'])
+                    ->delete();
+                
+                // Reset counter
+                $this->scheduledHours = [];
+                $this->dailyCount = [];
+                $this->classDailyCount = [];
+                
+                // Generate ulang untuk teach ini
+                $this->randomingProcess($type);
+            }
+            
+            $violations = $this->validateAndFixMinHours($type);
+            $repairCount++;
+        }
+        
+        return $violations;
+    }
+    
+    // ==================== METHOD LAINNYA (tidak berubah) ====================
     
     private function getScheduledHours($type, $teachId)
     {
@@ -232,10 +360,9 @@ class GenerateAlgoritma
         }
         $this->classDailyCount[$type][$roomId][$dayId]++;
     }
-        
+    
     public function randKromosom($kromosom, $count_teachs)
     {
-        // CEK DULU APAKAH MUNGKIN
         $check = $this->checkIfPossible();
         
         if (!$check['status']) {
@@ -245,11 +372,9 @@ class GenerateAlgoritma
                 $message .= "• Kelas {$v['class']}: butuh {$v['required']} JP, kapasitas {$v['capacity']} JP (kelebihan {$v['shortage']} JP)\n";
             }
             $message .= "\n📌 Solusi: Kurangi JP/minggu pada mata pelajaran.";
-            
             throw new \Exception($message);
         }
         
-        // Lanjut generate seperti biasa
         for ($i = 0; $i < $kromosom; $i++) {
             Schedule::where('type', $i + 1)->delete();
         }
@@ -271,6 +396,9 @@ class GenerateAlgoritma
                 }
             }
             
+            // Perbaiki jadwal yang melanggar MIN per hari
+            $this->repairMinHours($i);
+            
             \Log::info("Kromosom " . ($i + 1) . ": " . $successCount . " dari " . $totalRequiredSlots . " slot terjadwal");
         }
         
@@ -281,7 +409,6 @@ class GenerateAlgoritma
     {
         $teachs = Teach::with('course');
         
-        // 🔥 TAMBAHKAN FILTER JUGA DI SINI 🔥
         if (!empty($this->filteredClasses)) {
             $teachs = $teachs->whereIn('class_room', $this->filteredClasses);
         }
@@ -295,6 +422,9 @@ class GenerateAlgoritma
         
         return $total;
     }
+    
+    // Method checkPinalty, increaseProccess, validateMinHoursPerDay, repairSchedule tetap sama...
+    // (tambahkan di bawah)
     
     public function checkPinalty()
     {
@@ -390,66 +520,129 @@ class GenerateAlgoritma
         }
         return $schedules;
     }
-    
-    public function validateMinHoursPerDay($type)
+
+    /**
+     * Cari slot waktu berurutan yang tersedia dalam satu hari (mulai dari jam pertama)
+     */
+    private function getConsecutiveAvailableSlotsFromStart($type, $teach, $day, $neededSlots)
     {
-        $violations = [];
-        $teachs = Teach::with('course')->get();
+        $times = Time::orderBy('time_begin')->get();
         
-        foreach ($teachs as $teach) {
-            $course = $teach->course;
-            $schedules = Schedule::where('type', $type)
-                ->where('teachs_id', $teach->id)
-                ->select('days_id', DB::raw('count(*) as total'))
-                ->groupBy('days_id')
-                ->get();
+        for ($i = 0; $i <= $times->count() - $neededSlots; $i++) {
+            $isAvailable = true;
+            $slots = [];
             
-            foreach ($schedules as $sch) {
-                if ($sch->total < $course->min_hours_per_day) {
-                    $violations[] = [
-                        'course' => $course->name,
-                        'teacher' => $teach->lecturer->name,
-                        'class' => $teach->room->name,
-                        'day' => Day::find($sch->days_id)->name_day,
-                        'actual' => $sch->total,
-                        'required' => $course->min_hours_per_day
-                    ];
+            for ($j = 0; $j < $neededSlots; $j++) {
+                $checkTime = $times[$i + $j];
+                
+                // Cek apakah slot ini sudah terisi untuk guru atau kelas
+                $isBooked = Schedule::where('type', $type)
+                    ->where('days_id', $day->id)
+                    ->where('times_id', $checkTime->id)
+                    ->where(function($q) use ($teach) {
+                        $q->where('rooms_id', $teach->class_room)
+                        ->orWhere('teachs_id', $teach->id);
+                    })
+                    ->exists();
+                
+                if ($isBooked) {
+                    $isAvailable = false;
+                    break;
                 }
+                
+                $slots[] = $checkTime;
+            }
+            
+            if ($isAvailable) {
+                return $slots;
             }
         }
         
-        return $violations;
+        return null;
     }
 
-    public function repairSchedule($type)
+    /**
+     * Cek apakah dalam satu hari, jadwal untuk satu mapel berurutan (tidak terselingi)
+     */
+    private function isMapelConsecutiveInDay($type, $teachId, $dayId)
     {
-        $violations = $this->validateMinHoursPerDay($type);
+        $schedules = Schedule::where('type', $type)
+            ->where('teachs_id', $teachId)
+            ->where('days_id', $dayId)
+            ->orderBy('times_id')
+            ->get();
         
-        foreach ($violations as $v) {
-            // Cari course berdasarkan nama
-            $course = Course::where('name', $v['course'])->first();
-            if (!$course) continue;
-            
-            // Cari teach berdasarkan course_id dan class
-            $teach = Teach::where('courses_id', $course->id)
-                ->whereHas('room', function($q) use ($v) {
-                    $q->where('name', $v['class']);
-                })
-                ->whereHas('lecturer', function($q) use ($v) {
-                    $q->where('name', $v['teacher']);
-                })
-                ->first();
-            
-            if ($teach) {
-                // Cek apakah masih bisa tambah jam
-                $currentHours = $this->getScheduledHours($type, $teach->id);
-                if ($currentHours < $teach->course->hours_per_week) {
-                    $this->randomingProcess($type);
-                }
+        if ($schedules->count() <= 1) {
+            return true; // 1 atau 0 jadwal, sudah otomatis consecutive
+        }
+        
+        $times = $schedules->pluck('times_id')->toArray();
+        
+        // Cek apakah times_id berurutan (contoh: [1,2,3] atau [2,3,4])
+        for ($i = 0; $i < count($times) - 1; $i++) {
+            if ($times[$i + 1] != $times[$i] + 1) {
+                return false; // Tidak berurutan, ada gap
             }
         }
         
-        return $this->validateMinHoursPerDay($type);
+        return true;
     }
-    
+
+    /**
+     * Perbaiki jadwal yang tidak kontinu dalam satu hari untuk satu mapel
+     */
+    public function repairConsecutiveInDay($type)
+    {
+        $teachs = Teach::with('course')->get();
+        $maxRepairs = 100;
+        $repairCount = 0;
+        $fixed = false;
+        
+        do {
+            $fixed = false;
+            
+            foreach ($teachs as $teach) {
+                // Ambil semua hari yang memiliki jadwal untuk teach ini
+                $days = Schedule::where('type', $type)
+                    ->where('teachs_id', $teach->id)
+                    ->groupBy('days_id')
+                    ->pluck('days_id');
+                
+                foreach ($days as $dayId) {
+                    if (!$this->isMapelConsecutiveInDay($type, $teach->id, $dayId)) {
+                        // Hapus semua jadwal teach ini di hari itu
+                        Schedule::where('type', $type)
+                            ->where('teachs_id', $teach->id)
+                            ->where('days_id', $dayId)
+                            ->delete();
+                        
+                        // Reset counter
+                        $this->scheduledHours = [];
+                        $this->dailyCount = [];
+                        $this->classDailyCount = [];
+                        
+                        // Generate ulang untuk teach ini (prioritaskan hari itu)
+                        $course = $teach->course;
+                        $neededSlots = $course->hours_per_week - $this->getScheduledHours($type, $teach->id);
+                        
+                        for ($i = 0; $i < $neededSlots; $i++) {
+                            $this->randomingProcess($type);
+                        }
+                        
+                        $fixed = true;
+                        $repairCount++;
+                        break 2; // Keluar dari kedua loop, mulai ulang
+                    }
+                }
+            }
+            
+            if ($repairCount >= $maxRepairs) {
+                break;
+            }
+            
+        } while ($fixed);
+        
+        return $repairCount;
+    }
+
 }

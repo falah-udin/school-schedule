@@ -189,6 +189,10 @@
 <script>
     let checkInterval = null;
     let currentStep = 1;
+    let pollingAttempts = 0;
+    let lastTotal = 0;
+    let noChangeCount = 0;
+    let startTime = null;
 
     function selectAllClasses() {
         $('.class-checkbox').prop('checked', true);
@@ -199,6 +203,8 @@
     }
 
     function setExample(type) {
+        console.log('setExample dipanggil dengan type:', type);
+        
         if (type === 'basic') {
             document.getElementById('kromosom').value = '1';
             document.getElementById('generasi').value = '1';
@@ -209,15 +215,98 @@
             document.getElementById('generasi').value = '2';
             document.getElementById('crossover').value = '0.5';
             document.getElementById('mutasi').value = '0.2';
-        } else if (type === 'max') {
+        } else if (type === 'advanced') {
             document.getElementById('kromosom').value = '3';
+            document.getElementById('generasi').value = '2';
+            document.getElementById('crossover').value = '0.7';
+            document.getElementById('mutasi').value = '0.25';
+        } else if (type === 'max') {
+            document.getElementById('kromosom').value = '4';
             document.getElementById('generasi').value = '3';
             document.getElementById('crossover').value = '0.8';
             document.getElementById('mutasi').value = '0.3';
+        } else if (type === 'extreme') {
+            document.getElementById('kromosom').value = '5';
+            document.getElementById('generasi').value = '4';
+            document.getElementById('crossover').value = '0.9';
+            document.getElementById('mutasi').value = '0.4';
+        } else if (type === 'insane') {
+            document.getElementById('kromosom').value = '5';
+            document.getElementById('generasi').value = '5';
+            document.getElementById('crossover').value = '1.0';
+            document.getElementById('mutasi').value = '0.5';
         }
+        
+        $('#kromosom').trigger('change');
+        $('#generasi').trigger('change');
+        $('#crossover').trigger('change');
+        $('#mutasi').trigger('change');
+        
+        updateEstimation();
     }
     
-    function updateStep(step, message) {
+    function updateEstimation() {
+        var kromosom = parseInt($('#kromosom').val()) || 1;
+        var generasi = parseInt($('#generasi').val()) || 1;
+        var totalKromosom = kromosom * generasi;
+        
+        var targetJpPerKromosom = 468;
+        var estimasiJadwal = totalKromosom * targetJpPerKromosom;
+        
+        var estimasiWaktu = '';
+        var warningText = '';
+        
+        // Estimasi lebih akurat (per kromosom ~2-3 menit untuk ekstrim)
+        var estimasiMenit = totalKromosom * 2.5;
+        
+        if (totalKromosom <= 2) {
+            estimasiWaktu = '~1 menit';
+            warningText = '';
+        } else if (totalKromosom <= 6) {
+            estimasiWaktu = '~3-5 menit';
+            warningText = '';
+        } else if (totalKromosom <= 12) {
+            estimasiWaktu = '~8-12 menit';
+            warningText = '⚠️ Proses lama, harap tunggu';
+        } else if (totalKromosom <= 20) {
+            estimasiWaktu = '~15-25 menit';
+            warningText = '⚠️⚠️ Proses sangat lama';
+        } else {
+            estimasiWaktu = '~30-45 menit';
+            warningText = '⏰ Proses ekstrim, pastikan koneksi stabil';
+        }
+        
+        $('#est-total-kromosom').text(totalKromosom);
+        $('#est-total-jadwal').text(estimasiJadwal.toLocaleString());
+        $('#est-per-kromosom').text(targetJpPerKromosom);
+        $('#est-waktu').html(estimasiWaktu + (warningText ? '<br><small style="font-size:10px;">' + warningText + '</small>' : ''));
+        
+        var card = $('#estimation-card');
+        if (totalKromosom <= 4) {
+            card.css('background', 'linear-gradient(135deg, #28a745 0%, #1e7e34 100%)');
+        } else if (totalKromosom <= 10) {
+            card.css('background', 'linear-gradient(135deg, #ffc107 0%, #d39e00 100%)');
+        } else if (totalKromosom <= 20) {
+            card.css('background', 'linear-gradient(135deg, #fd7e14 0%, #dc3545 100%)');
+        } else {
+            card.css('background', 'linear-gradient(135deg, #dc3545 0%, #6c1a2a 100%)');
+        }
+    }
+
+    $(document).ready(function() {
+        console.log('Document ready');
+        
+        $('#kromosom, #generasi').on('change', function() {
+            console.log('Change event triggered - Kromosom:', $('#kromosom').val(), 'Generasi:', $('#generasi').val());
+            updateEstimation();
+        });
+        
+        updateEstimation();
+        
+        $('#btn-generate').on('click', startGenerate);
+    });
+
+    function updateStep(step, message, totalKromosom = null, currentKromosom = null) {
         for (let i = 1; i <= 4; i++) {
             $('#step-' + i).removeClass('active completed');
             if (i < step) {
@@ -230,15 +319,23 @@
                 $('#step-icon-' + i).html('<i class="fa fa-circle-o"></i>');
             }
         }
-        if (message) {
-            $('.loading-message').html(message);
+        
+        var displayMessage = message;
+        if (totalKromosom && currentKromosom) {
+            displayMessage += `<br><strong>Progress Kromosom: ${currentKromosom} / ${totalKromosom}</strong>`;
         }
+        
+        $('.loading-message').html(displayMessage);
     }
     
-    function updateProgress(percent, message) {
+    function updateProgress(percent, message, currentKromosom = null, totalKromosom = null) {
         $('.loading-progress-bar').css('width', percent + '%');
         if (message) {
-            $('.loading-message').html(message);
+            var msg = message;
+            if (totalKromosom && currentKromosom) {
+                msg += ` (${currentKromosom}/${totalKromosom})`;
+            }
+            $('.loading-message').html(msg);
         }
     }
     
@@ -246,8 +343,14 @@
         var logClass = type || 'info';
         var logDiv = $('#log-box');
         if (logDiv.length === 0) return;
-        logDiv.append('<div class="' + logClass + '">[' + new Date().toLocaleTimeString() + '] ' + message + '</div>');
+        var waktu = new Date().toLocaleTimeString();
+        logDiv.append('<div class="' + logClass + '">[' + waktu + '] ' + message + '</div>');
         logDiv.scrollTop(logDiv[0].scrollHeight);
+        
+        // Auto-hide log jika terlalu panjang (keep last 100 messages)
+        if (logDiv.children().length > 100) {
+            logDiv.children().slice(0, 50).remove();
+        }
     }
     
     function showLoadingModal() {
@@ -261,53 +364,127 @@
         }
         $('#log-box').empty();
         addLogMessage('🚀 Memulai proses generate jadwal...', 'info');
+        addLogMessage('📊 Estimasi selesai: ' + $('#est-waktu').text(), 'info');
+        
+        startTime = new Date();
     }
     
     function hideLoadingModal() {
         $('#loading-modal').hide();
+        if (checkInterval) {
+            clearInterval(checkInterval);
+            checkInterval = null;
+        }
     }
     
-    function startPolling() {
-        let pollCount = 0;
-        let lastTotal = 0;
-        let noChangeCount = 0;
+    function formatDuration(seconds) {
+        var mins = Math.floor(seconds / 60);
+        var secs = seconds % 60;
+        return mins > 0 ? `${mins} menit ${secs} detik` : `${secs} detik`;
+    }
+    
+    function startPolling(totalKromosomTarget = null) {
+        pollingAttempts = 0;
+        lastTotal = 0;
+        noChangeCount = 0;
         
+        // Polling setiap 5 detik (lebih ringan untuk proses panjang)
         checkInterval = setInterval(function() {
-            pollCount++;
+            pollingAttempts++;
+                    
+        $.get('{{ route("admin.generates.check-progress") }}', function(data) {
             
-            $.get('{{ route("admin.generates.check") }}', function(data) {
-                addLogMessage('Status: ' + data.message + ' (' + data.progress + '%) - Total: ' + data.total + ' jadwal', 'info');
-                updateProgress(data.progress);
-                updateStep(Math.min(4, Math.floor(data.progress / 25) + 1));
+                var progress = data.progress !== undefined ? data.progress : 0;
+                var message = data.message !== undefined ? data.message : 'Memproses...';
+                var total = data.total !== undefined ? data.total : 0;
+                var currentKromosom = data.current_kromosom !== undefined ? data.current_kromosom : 0;
+                var totalKromosom = data.total_kromosom !== undefined ? data.total_kromosom : (totalKromosomTarget || 0);
+                var kromosomStats = data.kromosom_stats || [];
                 
-                // Cek jika tidak ada perubahan
-                if (data.total === lastTotal && data.total > 0) {
-                    noChangeCount++;
-                    if (noChangeCount >= 3) {
-                        clearInterval(checkInterval);
-                        // Tampilkan notifikasi detail
-                        showDetailedResult(data);
+                var elapsedSeconds = startTime ? Math.floor((new Date() - startTime) / 1000) : 0;
+                var elapsedText = formatDuration(elapsedSeconds);
+                
+                addLogMessage(`[${elapsedText}] Kromosom ${currentKromosom}/${totalKromosom} | Progress: ${progress}% | ${message} | Total jadwal: ${total}`, 'info');
+                
+                // Update progress berdasarkan kromosom jika tersedia
+                if (totalKromosom > 0 && currentKromosom > 0) {
+                    var calculatedProgress = Math.floor((currentKromosom / totalKromosom) * 100);
+                    if (calculatedProgress > progress) {
+                        progress = calculatedProgress;
                     }
+                    updateProgress(progress, message, currentKromosom, totalKromosom);
+                    updateStep(Math.min(4, Math.floor(progress / 25) + 1), message, totalKromosom, currentKromosom);
                 } else {
+                    updateProgress(progress);
+                    updateStep(Math.min(4, Math.floor(progress / 25) + 1), message);
+                }
+                
+                // Update statistik kromosom di log
+                if (kromosomStats.length > 0) {
+                    var completedCount = kromosomStats.filter(s => s.count >= s.target).length;
+                    addLogMessage(`✅ Kromosom selesai: ${completedCount}/${kromosomStats.length}`, 'success');
+                }
+                
+                // Cek jika total kromosom tercapai
+                var allCompleted = false;
+                if (totalKromosom > 0 && currentKromosom >= totalKromosom) {
+                    allCompleted = true;
+                }
+                
+                // Jika progress 100% atau semua kromosom selesai
+                if (data.status === 'completed' || progress >= 100 || allCompleted) {
+                    clearInterval(checkInterval);
+                    checkInterval = null;
+                    addLogMessage('✅ Proses generate SELESAI! Mengambil hasil akhir...', 'success');
+                    fetchFinalResult();
+                }
+                
+                // Cek jika ada perubahan total jadwal
+                if (total !== lastTotal && total > 0) {
                     noChangeCount = 0;
-                    lastTotal = data.total;
+                    lastTotal = total;
+                } else if (total > 0) {
+                    noChangeCount++;
+                    // Jika tidak ada perubahan dalam 2 menit (24 polling × 5 detik = 120 detik)
+                    if (noChangeCount >= 24) {
+                        addLogMessage('⚠️ Tidak ada perubahan dalam 2 menit, mungkin proses selesai...', 'warning');
+                        clearInterval(checkInterval);
+                        checkInterval = null;
+                        fetchFinalResult();
+                    }
                 }
                 
-                if (data.status === 'completed' || data.progress >= 100) {
-                    clearInterval(checkInterval);
-                    showDetailedResult(data);
+                // Tidak ada timeout maksimal - biarkan sampai selesai
+                // Tapi kasih warning setiap 30 menit
+                if (pollingAttempts === 360) { // 30 menit = 360 × 5 detik
+                    addLogMessage('⏰ Proses masih berjalan setelah 30 menit. Harap bersabar...', 'warning');
+                }
+                if (pollingAttempts === 720) { // 60 menit
+                    addLogMessage('⚠️ Proses sudah 1 jam! Sistem mungkin stuck. Silakan refresh halaman.', 'error');
                 }
                 
-                if (pollCount > 60) {
-                    clearInterval(checkInterval);
-                    addLogMessage('⏰ Timeout polling, silakan cek hasil secara manual', 'warning');
-                    $('#btn-generate').prop('disabled', false).text('GENERATE JADWAL SEKARANG');
-                    $('#loading-modal').hide();
-                }
-            }).fail(function() {
-                addLogMessage('⚠️ Gagal mengambil status, mencoba lagi...', 'warning');
+            }).fail(function(xhr) {
+                addLogMessage(`⚠️ Gagal mengambil status (${xhr.status}). Mencoba lagi dalam 5 detik...`, 'warning');
+                // Jangan hentikan polling, terus coba
             });
-        }, 3000);
+        }, 5000); // Polling setiap 5 detik (lebih ringan)
+    }
+    
+    function fetchFinalResult() {
+        addLogMessage('📡 Mengambil hasil akhir generate...', 'info');
+        
+        $.get('{{ route("admin.generates.result-data") }}', function(data) {
+            showDetailedResult(data);
+        }).fail(function() {
+            addLogMessage('❌ Gagal mengambil data hasil, silakan refresh halaman', 'error');
+            hideLoadingModal();
+            $('#btn-generate').prop('disabled', false).text('GENERATE JADWAL SEKARANG');
+            Swal.fire({
+                icon: 'error',
+                title: 'Gagal mengambil hasil',
+                text: 'Silakan refresh halaman dan cek jadwal secara manual'
+            });
+        });
     }
 
     function showDetailedResult(data) {
@@ -315,12 +492,13 @@
         
         var target = data.target_per_kromosom || 468;
         
-        // Detail per kromosom
         var detailHtml = '<table style="width:100%; margin:10px 0; border-collapse:collapse;">';
         detailHtml += '<tr style="background:#f8f9fa;"><th style="text-align:left; padding:8px;">Kromosom</th><th style="text-align:center; padding:8px;">Berhasil</th><th style="text-align:center; padding:8px;">Target</th><th style="text-align:center; padding:8px;">Status</th></tr>';
         
         var semuaSempurna = true;
         var adaYangBerhasil = false;
+        var totalBerhasil = 0;
+        var totalTarget = 0;
         
         if (data.kromosom_stats && data.kromosom_stats.length > 0) {
             for (var i = 0; i < data.kromosom_stats.length; i++) {
@@ -328,12 +506,16 @@
                 var status = '';
                 var statusColor = '';
                 
+                totalBerhasil += stat.count;
+                totalTarget += stat.target;
+                
                 if (stat.count >= stat.target) {
                     status = '✅ Sempurna';
                     statusColor = '#28a745';
                     adaYangBerhasil = true;
                 } else if (stat.count > 0) {
-                    status = '⚠️ ' + stat.percentage + '% (' + stat.count + '/' + stat.target + ')';
+                    var percent = Math.floor((stat.count / stat.target) * 100);
+                    status = '⚠️ ' + percent + '% (' + stat.count + '/' + stat.target + ')';
                     statusColor = '#ffc107';
                     semuaSempurna = false;
                     adaYangBerhasil = true;
@@ -353,40 +535,51 @@
         } else {
             detailHtml += '<tr><td colspan="4" style="text-align:center;">Tidak ada data kromosom</td></tr>';
         }
-        detailHtml += '</table>';
+        detailHtml += '身able>';
+        
+        // Ringkasan total
+        var totalPercent = totalTarget > 0 ? Math.floor((totalBerhasil / totalTarget) * 100) : 0;
         
         var icon = 'success';
         var title = '✅ Generate Selesai!';
         
         if (semuaSempurna) {
-            title = '🎉 SEMPURNA! Semua Kromosom Berhasil';
-        } else if (adaYangBerhasil) {
+            title = '🎉 SEMPURNA! Semua Kromosom Berhasil 100%';
+        } else if (totalPercent >= 80) {
+            icon = 'success';
+            title = '✅ Generate Berhasil (' + totalPercent + '%)';
+        } else if (totalPercent >= 50) {
             icon = 'warning';
-            title = '⚠️ Generate Sebagian Berhasil';
+            title = '⚠️ Generate Sebagian Berhasil (' + totalPercent + '%)';
+        } else if (totalBerhasil > 0) {
+            icon = 'warning';
+            title = '⚠️ Generate Kurang Optimal (' + totalPercent + '%)';
         } else {
             icon = 'error';
-            title = '❌ Generate Gagal Total';
+            title = '❌ Generate Gagal Total (0%)';
         }
+        
+        var totalJadwal = data.total || totalBerhasil;
         
         Swal.fire({
             icon: icon,
             title: title,
-            html: '<strong>Total:</strong> ' + data.total + ' jadwal<br><br>' + detailHtml,
+            html: '<div style="text-align:left;">' +
+                '<p><strong>📊 Ringkasan:</strong></p>' +
+                '<p>Total jadwal: <strong>' + totalJadwal.toLocaleString() + '</strong> JP</p>' +
+                '<p>Keberhasilan: <strong>' + totalPercent + '%</strong></p>' +
+                '<hr>' +
+                detailHtml +
+                '</div>',
             confirmButtonText: 'Lihat Jadwal',
-            width: '650px'
+            width: '700px',
+            confirmButtonColor: '#28a745'
         }).then(function() {
             window.location.href = '{{ route("admin.generates.result", 1) }}';
         });
+        
+        $('#btn-generate').prop('disabled', false).text('GENERATE JADWAL SEKARANG');
     }
-    
-    // Paksa semua AJAX pakai HTTPS
-    $.ajaxSetup({
-        beforeSend: function(xhr, settings) {
-            if (settings.url && settings.url.startsWith('http://')) {
-                settings.url = settings.url.replace('http://', 'https://');
-            }
-        }
-    });
 
     function startGenerateProcess(mode, kromosom, generasi, crossover, mutasi) {
         var selectedClasses = [];
@@ -394,15 +587,18 @@
             selectedClasses.push($(this).val());
         });
         
+        var totalKromosomTarget = parseInt(kromosom) * parseInt(generasi);
+        
         $('#btn-generate').prop('disabled', true).text('⏳ MEMPROSES...');
         showLoadingModal();
         
-        updateStep(2, 'Membangun kromosom...');
-        updateProgress(25);
+        updateStep(2, 'Membangun kromosom...', totalKromosomTarget, 0);
+        updateProgress(10);
         
         // Kirim request ke server
         $.ajax({
-            url: '{{ route("admin.generates.submit") }}',
+        url: '{{ route("admin.generates.submit.ajax") }}',
+
             method: 'GET',
             data: {
                 kromosom: kromosom,
@@ -412,29 +608,27 @@
                 mode: mode,
                 classes: selectedClasses
             },
-            timeout: 30000,
+            timeout: 60000, // 60 detik timeout untuk request awal
             success: function(response) {
-                if (response.redirect) {
-                    updateProgress(100);
-                    updateStep(4, 'Selesai! Mengalihkan...');
-                    setTimeout(function() {
-                        window.location.href = response.redirect;
-                    }, 1000);
-                } else {
-                    // Jika tidak ada redirect, mulai polling
-                    addLogMessage('Menunggu proses selesai...', 'info');
-                    startPolling();
-                }
+                addLogMessage('✅ Generate dimulai, menunggu proses selesai...', 'success');
+                addLogMessage(`📊 Target total kromosom: ${totalKromosomTarget}`, 'info');
+                // Mulai polling dengan target total kromosom
+                startPolling(totalKromosomTarget);
             },
             error: function(xhr) {
-                if (xhr.status === 504 || xhr.status === 0) {
-                    addLogMessage('⚠️ Proses generate masih berjalan di server...', 'warning');
+                if (xhr.status === 504 || xhr.status === 0 || xhr.status === 502) {
+                    addLogMessage('⚠️ Request timeout, tapi proses mungkin masih berjalan di server...', 'warning');
                     addLogMessage('🔄 Memeriksa status secara berkala...', 'info');
-                    startPolling();
+                    startPolling(totalKromosomTarget);
                 } else {
-                    addLogMessage('❌ Error: ' + xhr.statusText, 'error');
+                    addLogMessage('❌ Error: ' + xhr.status + ' - ' + xhr.statusText, 'error');
                     $('#btn-generate').prop('disabled', false).text('GENERATE JADWAL SEKARANG');
-                    $('#loading-modal').hide();
+                    hideLoadingModal();
+                    Swal.fire({
+                        icon: 'error',
+                        title: 'Gagal memulai generate',
+                        text: 'Silakan coba lagi atau hubungi administrator'
+                    });
                 }
             }
         });
@@ -445,11 +639,22 @@
         var generasi = $('#generasi').val();
         var crossover = $('#crossover').val();
         var mutasi = $('#mutasi').val();
+        var totalKromosom = parseInt(kromosom) * parseInt(generasi);
+        
+        var estimasiMenit = Math.ceil(totalKromosom * 2.5);
+        var estimasiText = '';
+        if (estimasiMenit <= 2) estimasiText = 'kurang dari 2 menit';
+        else if (estimasiMenit <= 10) estimasiText = `sekitar ${estimasiMenit} menit`;
+        else if (estimasiMenit <= 20) estimasiText = `sekitar ${estimasiMenit} menit (proses lama)`;
+        else estimasiText = `${estimasiMenit} menit (sangat lama, harap bersabar)`;
         
         Swal.fire({
             title: 'Pilihan Generate',
             html: '<div style="text-align:left">' +
                 '<p><strong>🧬 Parameter:</strong> Kromosom=' + kromosom + ', Generasi=' + generasi + '</p>' +
+                '<p><strong>📊 Total Kromosom:</strong> ' + totalKromosom + '</p>' +
+                '<p><strong>⏱️ Estimasi Waktu:</strong> ' + estimasiText + '</p>' +
+                '<hr>' +
                 '<p><strong>📌 Pilih mode:</strong></p>' +
                 '<label style="display:block; padding:8px; margin:5px 0; background:#f8f9fa; border-radius:5px; cursor:pointer;">' +
                 '<input type="radio" name="mode" value="append" checked> ➕ <strong>Tambah</strong> - Tambah ke jadwal yang sudah ada</label>' +
@@ -473,8 +678,13 @@
         });
     }
     
-    $(document).ready(function() {
-        $('#btn-generate').on('click', startGenerate);
+    // Paksa semua AJAX pakai HTTPS
+    $.ajaxSetup({
+        beforeSend: function(xhr, settings) {
+            if (settings.url && settings.url.startsWith('http://')) {
+                settings.url = settings.url.replace('http://', 'https://');
+            }
+        }
     });
 </script>
 @stop
@@ -518,14 +728,48 @@
             <div class="row mb-4">
                 <div class="col-12">
                     <label class="font-weight-bold">📌 Contoh Pengisian Cepat:</label>
-                    <div class="btn-group">
-                        <button type="button" class="btn btn-sm btn-outline-info" onclick="setExample('basic')">🔰 Pemula (Cepat)</button>
-                        <button type="button" class="btn btn-sm btn-outline-primary" onclick="setExample('standard')">⭐ Standar (Normal)</button>
+                    <div class="btn-group flex-wrap">
+                        <button type="button" class="btn btn-sm btn-outline-success" onclick="setExample('basic')">🔰 Pemula (Cepat)</button>
+                        <button type="button" class="btn btn-sm btn-outline-info" onclick="setExample('standard')">⭐ Standar (Normal)</button>
+                        <button type="button" class="btn btn-sm btn-outline-warning" onclick="setExample('advanced')">⚡ Lanjutan (Agresif)</button>
                         <button type="button" class="btn btn-sm btn-outline-danger" onclick="setExample('max')">🚀 Maksimal (Lambat)</button>
+                        <button type="button" class="btn btn-sm btn-outline-dark" onclick="setExample('extreme')">💀 Ekstrim (Sangat Lambat)</button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setExample('insane')">🤪 Gila (⚠️ Resiko Timeout)</button>
                     </div>
                 </div>
             </div>
 
+            <!-- CARD ESTIMASI (DINAMIS) -->
+            <div class="param-card" id="estimation-card" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
+                <div class="param-label" style="color: white;">📊 Estimasi Generate</div>
+                <div class="param-desc" style="color: rgba(255,255,255,0.9);">
+                    Berdasarkan parameter yang Anda pilih:
+                </div>
+                <div class="row mt-2">
+                    <div class="col-md-3">
+                        <div style="font-size: 28px; font-weight: bold;" id="est-total-kromosom">0</div>
+                        <div style="font-size: 12px;">Total Kromosom</div>
+                    </div>
+                    <div class="col-md-3">
+                        <div style="font-size: 28px; font-weight: bold;" id="est-total-jadwal">0</div>
+                        <div style="font-size: 12px;">Perkiraan Jadwal</div>
+                    </div>
+                    <div class="col-md-3">
+                        <div style="font-size: 28px; font-weight: bold;" id="est-per-kromosom">0</div>
+                        <div style="font-size: 12px;">JP per Kromosom</div>
+                    </div>
+                    <div class="col-md-3">
+                        <div style="font-size: 28px; font-weight: bold;" id="est-waktu">~30s</div>
+                        <div style="font-size: 12px;">Estimasi Waktu</div>
+                    </div>
+                </div>
+                <div class="mt-2" style="font-size: 12px; opacity: 0.8;">
+                    <i class="fa fa-info-circle"></i> 
+                    Kromosom × Generasi = Total kromosom | 
+                    Target per kromosom: <span id="est-target-jp">468</span> JP (12 kelas × 39 JP)
+                </div>
+            </div>
+            
             <form id="generate-form" action="{{ route('admin.generates.submit') }}" method="GET">
                 <div class="row">
                     <div class="col-md-6">
@@ -536,6 +780,9 @@
                                 <option value="1">1 (Cepat - testing)</option>
                                 <option value="2">2 (Ringan)</option>
                                 <option value="3">3 (Sedang)</option>
+                                <option value="4">4 (Berat - untuk Ekstrim)</option>
+                                <option value="5">5 (Sangat Berat - untuk Gila)</option>
+                            </select>
                             </select>
                         </div>
                     </div>
@@ -547,6 +794,8 @@
                                 <option value="1">1 (Testing)</option>
                                 <option value="2">2 (Normal)</option>
                                 <option value="3">3 (Maksimal)</option>
+                                <option value="4">4 (Ekstrim)</option>
+                                <option value="5">5 (Gila)</option>
                             </select>
                         </div>
                     </div>
@@ -557,8 +806,10 @@
                             <select name="crossover" id="crossover" class="form-control">
                                 <option value="0.1">0.1 (Konservatif)</option>
                                 <option value="0.5" selected>0.5 (Seimbang)</option>
-                                <option value="0.8">0.8 (Agresif)</option>
-                                <option value="1.0">1.0 (Maksimal)</option>
+                                <option value="0.7">0.7 (Agresif)</option>
+                                <option value="0.8">0.8 (Maksimal)</option>
+                                <option value="0.9">0.9 (Ekstrim)</option>
+                                <option value="1.0">1.0 (Gila)</option>
                             </select>
                         </div>
                     </div>
@@ -571,7 +822,8 @@
                                 <option value="0.1" selected>0.1 (Jarang)</option>
                                 <option value="0.2">0.2 (Sedang)</option>
                                 <option value="0.3">0.3 (Sering)</option>
-                                <option value="0.5">0.5 (Sangat sering)</option>
+                                <option value="0.4">0.4 (Ekstrim)</option>
+                                <option value="0.5">0.5 (Gila)</option>
                             </select>
                         </div>
                     </div>
