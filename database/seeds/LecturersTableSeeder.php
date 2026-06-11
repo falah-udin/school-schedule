@@ -8,44 +8,51 @@ class LecturersTableSeeder extends Seeder
     public function run()
     {
         $lecturers = [
-            // Matematika (2 guru)
+            // Matematika
             ['name' => 'Guru Matematika', 'nidn' => 'MTK001'],
-            ['name' => 'Guru Matematika 2', 'nidn' => 'MTK002'],
             
-            // Bahasa Indonesia (2 guru)
+            // Bahasa Indonesia
             ['name' => 'Guru Bahasa Indonesia', 'nidn' => 'BIN001'],
-            ['name' => 'Guru Bahasa Indonesia 2', 'nidn' => 'BIN002'],
             
-            // Bahasa Inggris (2 guru)
+            // Bahasa Inggris
             ['name' => 'Guru Bahasa Inggris', 'nidn' => 'BIG001'],
-            ['name' => 'Guru Bahasa Inggris 2', 'nidn' => 'BIG002'],
             
-            // IPA (2 guru)
+            // IPA
             ['name' => 'Guru IPA', 'nidn' => 'IPA001'],
-            ['name' => 'Guru IPA 2', 'nidn' => 'IPA002'],
             
-            // IPS (1 guru)
+            // IPS
             ['name' => 'Guru IPS', 'nidn' => 'IPS001'],
             
-            // PPKn (1 guru)
+            // PPKn
             ['name' => 'Guru PPKn', 'nidn' => 'PPK001'],
             
-            // Agama (1 guru)
+            // Agama
             ['name' => 'Guru Agama', 'nidn' => 'AGA001'],
             
-            // Penjaskes (1 guru)
+            // Penjaskes
             ['name' => 'Guru Penjaskes', 'nidn' => 'PJK001'],
             
-            // SBK (1 guru)
+            // SBK/Prakarya
             ['name' => 'Guru SBK', 'nidn' => 'SBK001'],
             
-            // MULOK (2 guru)
+            // MULOK
             ['name' => 'Guru MULOK', 'nidn' => 'MLK001'],
-            ['name' => 'Guru MULOK 2', 'nidn' => 'MLK002'],
+            
+            // INFORMATIKA (baru)
+            ['name' => 'Guru Informatika', 'nidn' => 'INF001'],
+            
+            // BK (baru)
+            ['name' => 'Guru BK', 'nidn' => 'BK001'],
         ];
         
         foreach ($lecturers as $lec) {
-            Lecturer::create($lec);
+            // Cek apakah sudah ada, jika belum buat
+            Lecturer::firstOrCreate(
+                ['name' => $lec['name']],
+                ['nidn' => $lec['nidn']]
+            );
         }
+        
+        $this->command->info('Total Lecturers: ' . Lecturer::count());
     }
 }

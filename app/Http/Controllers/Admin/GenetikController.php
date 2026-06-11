@@ -367,10 +367,6 @@ class GenetikController extends Controller
 
     public function submitAjaxProgress(Request $request)   
     {
-        \Log::info("=== submitAjaxProgress DIPANGGIL ===");
-        \Log::info("Mode: " . $request->input('mode'));
-        \Log::info("Kromosom: " . $request->input('kromosom'));
-        
         set_time_limit(3600);
         ini_set('memory_limit', '1024M');
         
@@ -406,6 +402,8 @@ class GenetikController extends Controller
             'kromosom_stats' => []
         ]);
         
+        $userId = auth()->id();
+
         try {
             $generate = new GenerateAlgoritma;
             
@@ -413,10 +411,15 @@ class GenetikController extends Controller
                 $generate->setFilteredClasses($selectedClasses);
             }
             
-            // 🔥 PANGGIL SEKALI dengan total kromosom
-            $generate->randKromosom($totalKromosomTarget, $count_teachs, $mode);
-            $generate->checkPinalty();
+            // 🔥 HANYA SATU PANGGILAN, TIDAK DUA KALI!
+            $generate->randKromosom($totalKromosomTarget, $count_teachs, $mode, $userId);
             
+            // 🔥 HAPUS UPDATE PROGRESS YANG TENGAH (tidak perlu)
+            // $this->saveProgress([...]); // <-- HAPUS INI JUGA
+            
+            // 🔥 PANGGIL checkPinalty SETELAH generate selesai
+            $generate->checkPinalty();
+                
             // Simpan setting akhir
             $total_gen = Setting::firstOrNew(['key' => 'total_gen']);
             $total_gen->value = $input_kromosom * $input_crossover;
@@ -445,7 +448,6 @@ class GenetikController extends Controller
         } catch (\Exception $e) {
             \Log::error("Generate gagal: " . $e->getMessage());
             
-            // 🔥 KIRIM STATUS ERROR KE FRONTEND
             $this->saveProgress([
                 'status' => 'error',
                 'progress' => 0,
@@ -456,7 +458,6 @@ class GenetikController extends Controller
                 'kromosom_stats' => []
             ]);
             
-            // 🔥 PASTIKAN FRONTEND TAU BAHWA ADA ERROR
             return response()->json([
                 'success' => false,
                 'error' => true,
@@ -468,17 +469,22 @@ class GenetikController extends Controller
     // Method untuk menyimpan progress (gunakan cache atau file)
     private function saveProgress($data)
     {
-        // Simpan ke cache (lebih cepat dari session untuk polling)
-        $progress = \Cache::get('generate_progress_' . auth()->id());        
-        // Juga simpan ke session sebagai backup
+        $userId = auth()->id() ?? 1;
+        $cacheKey = 'generate_progress_' . $userId;
+        
+        \Cache::put($cacheKey, $data, 3600);
         session(['generate_progress' => $data]);
+        
+        \Log::info("Progress saved [{$cacheKey}]: " . json_encode($data));
     }
 
     // Method untuk cek progress (panggil dari frontend)
     public function checkProgress()
     {
-        $progress = \Cache::get('generate_progress_' . auth()->id());
-        
+        $userId = auth()->id() ?? 1;
+        $cacheKey = 'generate_progress_' . $userId;
+        $progress = \Cache::get($cacheKey);
+                
         if (!$progress) {
             // Jika tidak ada progress, ambil dari database
             $selectedClasses = session('selected_classes', []);

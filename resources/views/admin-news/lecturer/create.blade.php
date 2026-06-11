@@ -11,15 +11,13 @@
     <div class="col-12">
       <div class="card">
         <div class="card-body">
-            
-                    @include('admin-news._partials.notifications')
-                    <h4 class="page-title">{{ $title }}</h4>
+            @include('admin-news._partials.notifications')
+            <h4 class="page-title">{{ $title }}</h4>
 
-                    {!! Form::open(['role' => 'form', 'files' => true, 'id' => 'form-register']) !!}
-                    @include('admin-news.lecturer.form')
-                    {!! Form::close() !!}
-
-            
+            {{-- PERBAIKAN: Tambahkan route untuk CREATE --}}
+            {!! Form::open(['role' => 'form', 'route' => 'admin.lecturer.store', 'files' => true, 'id' => 'form-register']) !!}
+                @include('admin-news.lecturer.form')
+            {!! Form::close() !!}
         </div>
     </div>
     </div>  

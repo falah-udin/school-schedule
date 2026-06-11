@@ -151,7 +151,6 @@ class GenerateAlgoritma
             
             // Jika sisa kebutuhan < min_per_hari
             if ($remainingNeeded > 0 && $remainingNeeded < $minRequiredPerDay && $currentDayHours == 0) {
-                \Log::warning("IMPOSSIBLE: Butuh {$remainingNeeded} JP tapi min per hari = {$minRequiredPerDay}. Hapus jadwal sebelumnya untuk teach {$teach->id}");
                 
                 Schedule::where('type', $type)
                     ->where('teachs_id', $teach->id)
@@ -578,7 +577,7 @@ class GenerateAlgoritma
         $this->classDailyCount[$type][$roomId][$dayId]++;
     }
     
-    public function randKromosom($kromosom, $count_teachs, $mode = 'replace_all')
+    public function randKromosom($kromosom, $count_teachs, $mode = 'replace_all', $userId = null)
     {
         $check = $this->checkIfPossible();
         
@@ -590,6 +589,11 @@ class GenerateAlgoritma
             }
             $message .= "\n📌 Solusi: Kurangi JP/minggu pada mata pelajaran.";
             throw new \Exception($message);
+        }
+        
+        // 🔥 JIKA userId TIDAK DIKIRIM, AMBIL DARI AUTH
+        if ($userId === null) {
+            $userId = auth()->id() ?? 1;
         }
         
         // 🔥 TENTUKAN TYPE AWAL BERDASARKAN MODE
@@ -604,7 +608,6 @@ class GenerateAlgoritma
             $retryCount = 0;
             $success = false;
             $bestRealCount = 0;
-            $bestData = null; // Simpan data terbaik
             
             while ($retryCount < $maxRetries && !$success) {
                 $this->scheduledHours = [];
@@ -616,6 +619,15 @@ class GenerateAlgoritma
                 
                 \Log::info("Generate type {$currentType} (target: {$totalRequiredSlots} JP) - Percobaan ke-" . ($retryCount + 1));
                 
+                // 🔥 UPDATE PROGRESS: Memulai generate kromosom
+                $this->updateProgress(
+                    $currentType,
+                    $i + 1,
+                    $kromosom,
+                "Memulai generate kromosom " . ($i + 1) . " dari {$kromosom}", 
+                $userId
+                );
+                
                 // Hapus data lama untuk percobaan ini
                 Schedule::where('type', $currentType)->delete();
                 
@@ -624,6 +636,17 @@ class GenerateAlgoritma
                     $result = $this->randomingProcess($currentType);
                     if ($result) {
                         $successCount++;
+                        
+                        // 🔥 UPDATE PROGRESS setiap 5 slot (agar tidak terlalu sering)
+                        if ($j % 5 == 0 || $j == $totalRequiredSlots - 1) {
+                            $slotProgress = round(($j + 1) / $totalRequiredSlots * 100);
+                            $this->updateProgress(
+                                $currentType,
+                                $i + 1,
+                                $kromosom,
+                                "Kromosom " . ($i + 1) . " dari {$kromosom}: mengisi slot " . ($j + 1) . "/{$totalRequiredSlots} ({$slotProgress}%)"
+                            );
+                        }
                     } else {
                         \Log::warning("Gagal mengisi slot ke-" . ($j+1) . " untuk type {$currentType}");
                         break;
@@ -635,32 +658,59 @@ class GenerateAlgoritma
                 $realCount = Schedule::where('type', $currentType)->count();
                 $percentage = $totalRequiredSlots > 0 ? round(($realCount / $totalRequiredSlots) * 100) : 0;
                 
-                // 🔥 SIMPAN DATA TERBAIK (yang paling mendekati target)
+                // 🔥 SIMPAN DATA TERBAIK
                 if ($realCount > $bestRealCount) {
                     $bestRealCount = $realCount;
-                    // Data sudah tersimpan di database, tidak perlu backup
                 }
                 
                 if ($realCount >= $totalRequiredSlots) {
                     $success = true;
                     \Log::info("✅ KROMOSOM TYPE {$currentType}: BERHASIL 100% ({$realCount}/{$totalRequiredSlots} JP)");
+                    
+                    // 🔥 UPDATE PROGRESS: Kromosom selesai 100%
+                    $this->updateProgress(
+                        $currentType,
+                        $i + 1,
+                        $kromosom,
+                        "✅ Kromosom " . ($i + 1) . " dari {$kromosom} SELESAI 100%"
+                    );
                 } else {
                     $retryCount++;
                     \Log::warning("⚠️ KROMOSOM TYPE {$currentType}: GAGAL! Hanya {$realCount}/{$totalRequiredSlots} JP ({$percentage}%). Retry {$retryCount}/{$maxRetries}");
                     
                     if ($retryCount >= $maxRetries) {
-                        // 🔥 JANGAN HAPUS DATA! Biarkan data terakhir yang sudah 89% tersimpan
                         \Log::error("❌ KROMOSOM TYPE {$currentType}: GAGAL TOTAL setelah {$maxRetries} kali percobaan! Data terakhir ({$bestRealCount}/{$totalRequiredSlots} JP) tetap disimpan.");
                         
-                        // 🔥 TIDAK MENGHAPUS DATA, LANGSUNG LANJUT KE KROMOSOM BERIKUTNYA
-                        // break; // Tetap lanjut ke kromosom berikutnya
+                        // 🔥 UPDATE PROGRESS: Kromosom gagal total
+                        $this->updateProgress(
+                            $currentType,
+                            $i + 1,
+                            $kromosom,
+                            "⚠️ Kromosom " . ($i + 1) . " dari {$kromosom} GAGAL! Hanya {$bestRealCount}/{$totalRequiredSlots} JP"
+                        );
                     } else {
                         // Hapus data yang gagal hanya jika masih ada percobaan tersisa
                         Schedule::where('type', $currentType)->delete();
+                        
+                        // 🔥 UPDATE PROGRESS: Akan retry
+                        $this->updateProgress(
+                            $currentType,
+                            $i + 1,
+                            $kromosom,
+                            "⚠️ Kromosom " . ($i + 1) . " gagal (retry {$retryCount}/{$maxRetries})"
+                        );
                     }
                 }
             }
         }
+        
+        // 🔥 UPDATE PROGRESS: Ringkasan akhir
+        $this->updateProgress(
+            0,
+            $kromosom,
+            $kromosom,
+            "Finalisasi jadwal..."
+        );
         
         // Ringkasan akhir
         $totalAll = Schedule::count();
@@ -973,6 +1023,31 @@ class GenerateAlgoritma
         $this->incrementClassDailyHours($type, $teach->class_room, $day->id);
         
         return $insert;
+    }
+
+    // Di GenerateAlgoritma.php, tambahkan method untuk update progress
+    // Ubah method updateProgress
+    private function updateProgress($type, $current, $total, $message, $userId = null)
+    {
+        if ($userId === null) {
+            $userId = auth()->id() ?? 1;
+        }
+        
+        $progressPercent = round(($current / $total) * 100);
+        $progressPercent = min($progressPercent, 99);
+        
+        $data = [
+            'status' => 'processing',
+            'progress' => $progressPercent,
+            'message' => $message,
+            'current_kromosom' => $current,
+            'total_kromosom' => $total,
+            'total_jadwal' => Schedule::count(),
+            'updated_at' => date('Y-m-d H:i:s')
+        ];
+        
+        $cacheKey = 'generate_progress_' . $userId;
+        \Cache::put($cacheKey, $data, 3600);
     }
 
 }

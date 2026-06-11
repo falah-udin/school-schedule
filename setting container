@@ -1,8 +1,6 @@
 docker exec -it school-master-php sh
 
-
 docker restart school-master-php
-
 
 # Stop semua container
 docker stop $(docker ps -aq)
@@ -12,3 +10,26 @@ sudo systemctl restart docker
 
 # Start semua container
 docker start $(docker ps -aq)
+
+
+
+# Rollback semua migrasi
+php artisan migrate:reset
+
+# Jalankan migrasi ulang
+php artisan migrate
+
+# Jalankan seeder
+php artisan db:seed
+
+
+# 1. Refresh dan seed ulang
+php artisan migrate:refresh --seed
+
+# 2. Clear cache
+php artisan cache:clear
+php artisan view:clear
+php artisan config:clear
+
+# 3. Verifikasi
+php artisan tinker
