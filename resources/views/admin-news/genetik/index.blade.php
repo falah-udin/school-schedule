@@ -424,8 +424,7 @@
                 method: 'GET',
                 timeout: 10000, // 10 detik timeout untuk polling
                 success: function(data) {
-                    // ... kode existing ...
-                    addLogMessage(`📊 Progress: ${data.progress}% | ${data.message}`, 'info');
+                    addLogMessage(`📊 Progress: ${data.message}`, 'info');
                     
                     if (data.status === 'error') {
                         clearInterval(checkInterval);
@@ -513,7 +512,7 @@
         } else {
             detailHtml += '<tr><td colspan="4" style="text-align:center;">Tidak ada data kromosom</td></tr>';
         }
-        detailHtml += '身able>';
+        detailHtml += 'Ringkasan';
         
         // Ringkasan total
         var totalPercent = totalTarget > 0 ? Math.floor((totalBerhasil / totalTarget) * 100) : 0;

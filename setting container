@@ -33,3 +33,15 @@ php artisan config:clear
 
 # 3. Verifikasi
 php artisan tinker
+
+
+
+# Lihat semua proses PHP yang berjalan
+ps aux | grep php
+
+# Hentikan semua proses PHP
+pkill -f php
+
+# Atau lebih spesifik untuk proses artisan/queue
+pkill -f artisan
+pkill -f queue

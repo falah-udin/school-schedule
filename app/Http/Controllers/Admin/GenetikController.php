@@ -411,9 +411,9 @@ class GenetikController extends Controller
                 $generate->setFilteredClasses($selectedClasses);
             }
             
-            // 🔥 HANYA SATU PANGGILAN, TIDAK DUA KALI!
+            // Hapus atau abaikan parameter $count_teachs
             $generate->randKromosom($totalKromosomTarget, $count_teachs, $mode, $userId);
-            
+
             // 🔥 HAPUS UPDATE PROGRESS YANG TENGAH (tidak perlu)
             // $this->saveProgress([...]); // <-- HAPUS INI JUGA
             
@@ -440,6 +440,7 @@ class GenetikController extends Controller
                 'kromosom_stats' => $this->getKromosomStats($selectedClasses)
             ]);
             
+                
             return response()->json([
                 'success' => true,
                 'redirect' => route('admin.generates.result', 0)
@@ -546,24 +547,10 @@ class GenetikController extends Controller
         return $stats;
     }
 
-    // Method untuk mengambil data hasil akhir
     public function getResultData()
     {
-        $selectedClasses = session('selected_classes', []);
-        
-        $teachsQuery = Teach::with('course');
-        if (!empty($selectedClasses)) {
-            $teachsQuery->whereIn('class_room', $selectedClasses);
-        }
-        
-        $targetPerKromosom = 0;
-        foreach ($teachsQuery->get() as $teach) {
-            $targetPerKromosom += $teach->course->hours_per_week;
-        }
-        
-        if ($targetPerKromosom == 0) {
-            $targetPerKromosom = 468;
-        }
+        // 🔥 AMBIL TYPE KROMOSOM DARI REQUEST (opsional, bisa di URL)
+        $typeId = request()->input('type');
         
         $kromosomTypes = Schedule::select('type')
             ->groupBy('type')
@@ -574,19 +561,44 @@ class GenetikController extends Controller
         $totalJadwal = 0;
         
         foreach ($kromosomTypes as $type) {
+            // 🔥 HITUNG TARGET UNTUK KROMOSOM INI (BERDASARKAN KELAS YANG ADA)
+            $classesInThisKromosom = Schedule::where('schedules.type', $type->type)
+                ->join('rooms', 'rooms.id', '=', 'schedules.rooms_id')
+                ->select('rooms.*')
+                ->distinct()
+                ->get();
+            
+            $targetForThisKromosom = 0;
+            foreach ($classesInThisKromosom as $room) {
+                $teachsForRoom = Teach::where('class_room', $room->id)->with('course')->get();
+                foreach ($teachsForRoom as $teach) {
+                    $targetForThisKromosom += $teach->course->hours_per_week;
+                }
+            }
+            
+            // Fallback jika tidak ada kelas
+            if ($targetForThisKromosom == 0) {
+                $targetForThisKromosom = Schedule::where('type', $type->type)->count();
+            }
+            
             $count = Schedule::where('type', $type->type)->count();
             $totalJadwal += $count;
+            $percentage = $targetForThisKromosom > 0 ? round(($count / $targetForThisKromosom) * 100) : 0;
+            
             $kromosomStats[] = [
                 'type' => $type->type,
                 'count' => $count,
-                'target' => $targetPerKromosom,
-                'percentage' => $targetPerKromosom > 0 ? round(($count / $targetPerKromosom) * 100) : 0
+                'target' => $targetForThisKromosom,  // ← TARGET DINAMIS PER KROMOSOM
+                'percentage' => $percentage
             ];
         }
         
+        // Untuk target_per_kromosom global (gunakan rata-rata atau data pertama)
+        $avgTarget = count($kromosomStats) > 0 ? $kromosomStats[0]['target'] : 468;
+        
         return response()->json([
             'total' => $totalJadwal,
-            'target_per_kromosom' => $targetPerKromosom,
+            'target_per_kromosom' => $avgTarget,
             'kromosom_stats' => $kromosomStats
         ]);
     }
@@ -620,7 +632,9 @@ class GenetikController extends Controller
         $logFile = storage_path('logs/laravel.log');
         if (!file_exists($logFile)) return 'Menunggu proses dimulai...';
         
-        $lines = file($logFile);
+        $lines = @file($logFile); // Tambahkan @ untuk suppress warning
+        if ($lines === false) return 'Tidak bisa membaca log';
+        
         $lastLines = array_slice($lines, -5);
         
         foreach ($lastLines as $line) {
@@ -673,6 +687,24 @@ class GenetikController extends Controller
             'kromosom_stats' => $kromosomStats,
             'total_kromosom' => count($kromosomTypes)
         ]);
+    }
+
+    public function debugSchedule($type)
+    {
+        $generate = new \App\Algoritma\GenerateAlgoritma;
+        
+        \Log::info("========== DEBUG MANUAL UNTUK TYPE {$type} ==========");
+        
+        // Cek bentrok
+        $generate->debugConflictsDirect($type);
+        
+        // Cek jadwal per kelas
+        $classes = Room::all();
+        foreach ($classes as $class) {
+            $generate->debugClassSchedule($type, $class->id);
+        }
+        
+        return response()->json(['message' => 'Debug selesai, cek log Laravel']);
     }
 
 }

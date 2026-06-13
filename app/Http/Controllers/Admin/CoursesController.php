@@ -9,11 +9,9 @@ class CoursesController extends Controller
 {
     public function index(Request $request)
     {
-
         $courses = Course::orderBy('id', 'desc');
 
-        if (!empty($request->searchname))
-        {
+        if (!empty($request->searchname)) {
             $courses = $courses->where('name', 'LIKE', '%' . $request->searchname . '%');
         }
 
@@ -24,7 +22,6 @@ class CoursesController extends Controller
 
     public function create(Request $request)
     {
-
         return view('admin-news.courses.create');
     }
 
@@ -36,9 +33,9 @@ class CoursesController extends Controller
 
         $params = [
             'name' => $request->input('namecourses'),
-            'hours_per_week' => $request->input('hours_per_week', 2),
-            'min_hours_per_day' => $request->input('min_hours_per_day', 1),
-            'max_hours_per_day' => $request->input('max_hours_per_day', 2),
+            'hours_per_week' => (int)$request->input('hours_per_week', 0),
+            'min_hours_per_day' => (int)$request->input('min_hours_per_day', 0),
+            'max_hours_per_day' => (int)$request->input('max_hours_per_day', 0),
         ];
 
         $courses = Course::create($params);
@@ -46,6 +43,18 @@ class CoursesController extends Controller
         return redirect()->route('admin.courses')->with('success', 'Mata Pelajaran berhasil ditambahkan!');
     }
 
+    public function edit($id)
+    {
+        $courses = Course::find($id);
+
+        if ($courses == null) {
+            return view('admin-news.layouts.404');
+        }
+
+        return view('admin-news.courses.edit', compact('courses'));
+    }
+
+    // 🔥 METHOD UPDATE menggunakan GET (sesuai route)
     public function update(Request $request, $id)
     {
         $this->validate($request, [
@@ -53,27 +62,19 @@ class CoursesController extends Controller
         ]);
 
         $courses = Course::find($id);
+        
+        if (!$courses) {
+            return redirect()->route('admin.courses')->with('danger', 'Data tidak ditemukan!');
+        }
+        
         $courses->name = $request->input('namecourses');
-        $courses->hours_per_week = $request->input('hours_per_week', 2);
-        $courses->min_hours_per_day = $request->input('min_hours_per_day', 1);
-        $courses->max_hours_per_day = $request->input('max_hours_per_day', 2);
+        $courses->hours_per_week = (int)$request->input('hours_per_week', 0);
+        $courses->min_hours_per_day = (int)$request->input('min_hours_per_day', 0);
+        $courses->max_hours_per_day = (int)$request->input('max_hours_per_day', 0);
         $courses->save();
 
         return redirect()->route('admin.courses')->with('success', '<strong>✅ Mata Pelajaran berhasil diubah!</strong>');
     }
-
-    public function edit($id)
-    {
-        $courses = Course::find($id);
-
-        if ($courses == null)
-        {
-            return view('admin-news.layouts.404');
-        }
-
-        return view('admin-news.courses.edit', compact('courses'));
-    }
-
 
     public function destroy($id)
     {
@@ -101,7 +102,6 @@ class CoursesController extends Controller
         return redirect()->route('admin.courses')->with('success', '<strong>✅ BERHASIL!</strong> Mata Pelajaran "' . $course->name . '" berhasil dihapus.');
     }
 
-
     // Simpan alokasi waktu semua mapel
     public function allocationSave(Request $request)
     {
@@ -113,9 +113,9 @@ class CoursesController extends Controller
         foreach ($courses as $courseId) {
             $course = Course::find($courseId);
             if ($course) {
-                $course->hours_per_week = $hours_per_week[$courseId] ?? 2;
-                $course->min_hours_per_day = $min_hours_per_day[$courseId] ?? 1;
-                $course->max_hours_per_day = $max_hours_per_day[$courseId] ?? 2;
+                $course->hours_per_week = $hours_per_week[$courseId] ?? 0;
+                $course->min_hours_per_day = $min_hours_per_day[$courseId] ?? 0;
+                $course->max_hours_per_day = $max_hours_per_day[$courseId] ?? 0;
                 $course->save();
             }
         }
@@ -129,7 +129,6 @@ class CoursesController extends Controller
         $courses = Course::with('teachs')->get();
         $totalKelas = \App\Models\Room::count();
         
-        // ARAHKAN KE VIEW YANG BENAR (admin-news)
         return view('admin-news.courses.allocation', compact('courses', 'totalKelas'));
     }
 
@@ -138,7 +137,6 @@ class CoursesController extends Controller
     {
         $course = Course::findOrFail($id);
         
-        // ARAHKAN KE VIEW YANG BENAR
         return view('admin-news.courses.allocation_edit', compact('course'));
     }
 
@@ -146,13 +144,11 @@ class CoursesController extends Controller
     public function allocationUpdate(Request $request, $id)
     {
         $course = Course::findOrFail($id);
-        $course->hours_per_week = $request->input('hours_per_week');
-        $course->min_hours_per_day = $request->input('min_hours_per_day');
-        $course->max_hours_per_day = $request->input('max_hours_per_day');
+        $course->hours_per_week = (int)$request->input('hours_per_week', 0);
+        $course->min_hours_per_day = (int)$request->input('min_hours_per_day', 0);
+        $course->max_hours_per_day = (int)$request->input('max_hours_per_day', 0);
         $course->save();
         
         return redirect()->route('admin.courses')->with('success', 'Alokasi waktu ' . $course->name . ' berhasil diupdate!');
     }
-
-
 }

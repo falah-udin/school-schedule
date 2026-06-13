@@ -152,6 +152,9 @@
 @stop
 
 @section('content')
+@php
+use Illuminate\Support\Facades\DB;
+@endphp
 <div class="page-breadcrumb no-print">
     <div class="row">
         <div class="col-5 align-self-center">
@@ -210,10 +213,96 @@
         <div class="kromosom-grid">
             @foreach ($data_kromosom as $krom)
                 @php
-                    $totalSlots = $targetJpPerKromosom; 
+                    // 🔥 HITUNG TARGET HANYA UNTUK KELAS YANG ADA DI KROMOSOM INI
+                    $classesInThisKromosom = App\Models\Schedule::where('schedules.type', $krom['type'])
+                        ->join('rooms', 'rooms.id', '=', 'schedules.rooms_id')
+                        ->select('rooms.*')
+                        ->distinct()
+                        ->get();
+                    
+                    $targetJpForThisKromosom = 0;
+                    foreach ($classesInThisKromosom as $room) {
+                        $teachsForRoom = App\Models\Teach::where('class_room', $room->id)->with('course')->get();
+                        foreach ($teachsForRoom as $teach) {
+                            $targetJpForThisKromosom += $teach->course->hours_per_week;
+                        }
+                    }
+                    
+                    if ($targetJpForThisKromosom == 0) {
+                        $targetJpForThisKromosom = App\Models\Schedule::where('type', $krom['type'])->count();
+                    }
+                    
+                    $totalSlots = $targetJpForThisKromosom;
                     $achieved = App\Models\Schedule::where('type', $krom['type'])->count();
                     $percentage = $totalSlots > 0 ? round(($achieved / $totalSlots) * 100) : 0;
                     $isActive = ($id == $krom['type']);
+                    
+                    // 🔥 HITUNG JUMLAH PELANGGARAN UNTUK KROMOSOM INI
+                    $violationCount = 0;
+
+                    // Cek max per hari (tetap pakai Eloquent)
+                    $teachsInKromosom = App\Models\Teach::with('course')
+                        ->whereIn('class_room', $classesInThisKromosom->pluck('id')->toArray())
+                        ->get();
+
+                    foreach ($teachsInKromosom as $teach) {
+                        $dailyCounts = App\Models\Schedule::where('type', $krom['type'])
+                            ->where('teachs_id', $teach->id)
+                            ->select('days_id', \DB::raw('count(*) as total'))
+                            ->groupBy('days_id')
+                            ->get();
+                        foreach ($dailyCounts as $daily) {
+                            if ($daily->total > $teach->course->max_hours_per_day) {
+                                $violationCount++;
+                            }
+                            if ($daily->total < $teach->course->min_hours_per_day && $daily->total > 0) {
+                                $violationCount++;
+                            }
+                        }
+                    }
+
+                    // Cek bentrok guru - pakai DB::raw
+                    $teacherConflicts = DB::select("
+                        SELECT COUNT(*) as total FROM (
+                            SELECT lecturers.name, schedules.days_id, schedules.times_id, COUNT(*) as cnt
+                            FROM schedules
+                            JOIN teachs ON teachs.id = schedules.teachs_id
+                            JOIN lecturers ON lecturers.id = teachs.lecturers_id
+                            WHERE schedules.type = ?
+                            GROUP BY lecturers.name, schedules.days_id, schedules.times_id
+                            HAVING cnt > 1
+                        ) as conflicts
+                    ", [$krom['type']])[0]->total ?? 0;
+                    $violationCount += $teacherConflicts;
+
+                    // Cek bentrok kelas
+                    $classConflicts = DB::select("
+                        SELECT COUNT(*) as total FROM (
+                            SELECT rooms.name, schedules.days_id, schedules.times_id, COUNT(*) as cnt
+                            FROM schedules
+                            JOIN rooms ON rooms.id = schedules.rooms_id
+                            WHERE schedules.type = ?
+                            GROUP BY rooms.name, schedules.days_id, schedules.times_id
+                            HAVING cnt > 1
+                        ) as conflicts
+                    ", [$krom['type']])[0]->total ?? 0;
+                    $violationCount += $classConflicts;
+
+                    
+                    // Tentukan warna badge berdasarkan jumlah pelanggaran
+                    if ($violationCount == 0) {
+                        $badgeColor = 'success';
+                        $badgeIcon = '✅';
+                    } elseif ($violationCount < 5) {
+                        $badgeColor = 'warning';
+                        $badgeIcon = '⚠️';
+                    } else {
+                        $badgeColor = 'danger';
+                        $badgeIcon = '❌';
+                    }
+                    
+                    $jumlahKelasInKromosom = $classesInThisKromosom->count();
+                    $jpPerKelasInKromosom = $jumlahKelasInKromosom > 0 ? round($targetJpForThisKromosom / $jumlahKelasInKromosom) : 0;
                     
                     if ($achieved >= $totalSlots) {
                         $statusClass = 'success';
@@ -231,15 +320,44 @@
                         <div class="number">Kromosom {{ $krom['type'] }}</div>
                         <div class="stats">{{ $achieved }}/{{ $totalSlots }}</div>
                         <div class="percentage">{{ $icon }} {{ $percentage }}%</div>
+                        @if($jumlahKelasInKromosom > 0)
+                            <div class="small text-muted mt-1">{{ $jumlahKelasInKromosom }} kelas</div>
+                        @endif
+                        <!-- 🔥 BADGE PELANGGARAN -->
+                        <div class="mt-1">
+                            <span class="badge badge-{{ $badgeColor }}" style="font-size: 10px;">
+                                {{ $badgeIcon }} {{ $violationCount }} pelanggaran
+                            </span>
+                        </div>
                     </div>
                 </a>
             @endforeach
         </div>
 
+        @php
+            // 🔥 Hitung target untuk kromosom yang sedang aktif (yang dipilih)
+            $activeClasses = App\Models\Schedule::where('schedules.type', $id)
+                ->join('rooms', 'rooms.id', '=', 'schedules.rooms_id')
+                ->select('rooms.*')
+                ->distinct()
+                ->get();
+            
+            $activeTargetJp = 0;
+            foreach ($activeClasses as $room) {
+                $teachsForRoom = App\Models\Teach::where('class_room', $room->id)->with('course')->get();
+                foreach ($teachsForRoom as $teach) {
+                    $activeTargetJp += $teach->course->hours_per_week;
+                }
+            }
+            
+            $activeJumlahKelas = $activeClasses->count();
+            $activeJpPerKelas = $activeJumlahKelas > 0 ? round($activeTargetJp / $activeJumlahKelas) : 0;
+        @endphp
+
         <div class="mt-2 small text-muted">
             <i class="fa fa-info-circle"></i> 
-            Target per kromosom: <strong>{{ number_format($targetJpPerKromosom) }} JP</strong> 
-            ({{ $jumlahKelas }} kelas × {{ $jpPerKelas }} JP/kelas) 
+            Target kromosom {{ $id }}: <strong>{{ number_format($activeTargetJp) }} JP</strong> 
+            ({{ $activeJumlahKelas }} kelas × {{ $activeJpPerKelas }} JP/kelas) 
             | Klik card untuk melihat jadwal kromosom tersebut
         </div>
     </div>
@@ -283,16 +401,32 @@
                         // 🔥 AMBIL FILTER KELAS DARI URL
                         $filterClass = request()->input('class');
                         
-                        // 🔥 AMBIL DATA ROOM BERDASARKAN FILTER
+                        // 🔥 AMBIL KELAS YANG HANYA ADA DI KROMOSOM INI
+                        $classesInThisChromosome = App\Models\Schedule::where('schedules.type', $typeId)
+                            ->join('rooms', 'rooms.id', '=', 'schedules.rooms_id')
+                            ->select('rooms.*')
+                            ->distinct()
+                            ->get();
+                        
+                        // 🔥 Tentukan rooms berdasarkan filter dan kromosom
                         if (!empty($filterClass)) {
-                            $rooms = App\Models\Room::where('name', $filterClass)->get();
+                            // Jika difilter, cari kelas yang difilter DAN ada di kromosom ini
+                            $rooms = $classesInThisChromosome->filter(function($room) use ($filterClass) {
+                                return $room->name == $filterClass;
+                            });
                             $isFiltered = true;
                         } else {
-                            $rooms = App\Models\Room::all();
+                            // Jika tidak difilter, ambil semua kelas yang ada di kromosom ini
+                            $rooms = $classesInThisChromosome;
                             $isFiltered = false;
                         }
                         
-                        // HITUNG TARGET PER KELAS (HANYA YANG DIFILTER)
+                        // Jika tidak ada kelas di kromosom ini, tampilkan pesan
+                        if ($rooms->isEmpty()) {
+                            echo '<div class="alert alert-warning">Tidak ada data jadwal untuk kromosom ini</div>';
+                        }
+                        
+                        // HITUNG TARGET PER KELAS (HANYA UNTUK KELAS YANG ADA DI KROMOSOM INI)
                         $targetJpPerKromosom = 0;
                         $classTargets = [];
                         foreach ($rooms as $room) {
@@ -303,8 +437,8 @@
                             }
                             $classTargets[$room->name] = $totalJpForRoom;
                             $targetJpPerKromosom += $totalJpForRoom;
-                        }                     
-
+                        }
+                        
                         // 1. KAPASITAS KELAS (max 48 JP/minggu)
                         $maxJpPerWeek = (App\Models\Setting::get('jp_per_day', 8)) * 6;
                         $classViolations = [];
@@ -321,7 +455,7 @@
                             }
                         }
                         
-                        // 2. REALITA PER KELAS
+                        // 2. REALITA PER KELAS (HANYA KELAS YANG ADA DI KROMOSOM INI)
                         $classReality = [];
                         foreach ($rooms as $room) {
                             $actualJp = App\Models\Schedule::where('type', $typeId)->where('rooms_id', $room->id)->count();
@@ -336,10 +470,15 @@
                             ];
                         }
                         
+                        // ... kode selanjutnya tetap sama, gunakan $rooms (bukan Room::all())
                         // 3. MAX & MIN JP PER HARI PER MAPEL
                         $maxPerDayViolations = [];
                         $minPerDayViolations = [];
-                        $teachs = App\Models\Teach::with('course')->get();
+                        
+                        // 🔥 AMBIL TEACH HANYA UNTUK KELAS YANG ADA DI KROMOSOM INI
+                        $roomIds = $rooms->pluck('id')->toArray();
+                        $teachs = App\Models\Teach::with('course')->whereIn('class_room', $roomIds)->get();
+                        
                         foreach ($teachs as $teach) {
                             $dailyCounts = App\Models\Schedule::where('type', $typeId)->where('teachs_id', $teach->id)
                                 ->select('days_id', \DB::raw('count(*) as total'))->groupBy('days_id')->get();
@@ -367,7 +506,7 @@
                             }
                         }
                         
-                        // 4. BENTROK GURU & KELAS
+                        // 4. BENTROK GURU & KELAS (SUDAH TERBATAS OLEH $typeId)
                         $teacherConflicts = App\Models\Schedule::where('schedules.type', $typeId)
                             ->join('teachs', 'teachs.id', '=', 'schedules.teachs_id')
                             ->join('lecturers', 'lecturers.id', '=', 'teachs.lecturers_id')
@@ -383,7 +522,12 @@
                         
                         // 5. GAP & OVERLAP
                         $gapViolations = [];
-                        $schedulesByClass = App\Models\Schedule::where('type', $typeId)->with(['teach.course', 'day', 'time', 'room'])->get()->groupBy('rooms_id');
+                        $schedulesByClass = App\Models\Schedule::where('type', $typeId)
+                            ->whereIn('rooms_id', $roomIds)  // 🔥 FILTER KELAS YANG ADA DI KROMOSOM
+                            ->with(['teach.course', 'day', 'time', 'room'])
+                            ->get()
+                            ->groupBy('rooms_id');
+                            
                         foreach ($schedulesByClass as $roomId => $schedules) {
                             $roomName = $schedules->first()->room->name ?? '?';
                             foreach ($schedules->groupBy('days_id') as $dayId => $daySchedules) {
@@ -405,29 +549,63 @@
                         
                         // HITUNG TOTAL
                         $totalViolations = count($classViolations) + count($maxPerDayViolations) + count($minPerDayViolations) + 
-                                        $teacherConflicts->count() + $classConflicts->count() + count($gapViolations);
-                        $totalSchedules = App\Models\Schedule::where('type', $typeId)->count();
-                        $completionRate = $targetJpPerKromosom > 0 ? round(($totalSchedules / $targetJpPerKromosom) * 100) : 0;
-                        
-                        $statusColor = $totalViolations == 0 ? 'success' : ($totalViolations < 10 ? 'warning' : 'danger');
+                        $teacherConflicts->count() + $classConflicts->count() + count($gapViolations);
+                        // 🔥 Hitung total jadwal berdasarkan filter kelas
+                        if ($isFiltered && !empty($filterClass)) {
+                            $filteredRoom = App\Models\Room::where('name', $filterClass)->first();
+                            if ($filteredRoom) {
+                                $totalSchedules = App\Models\Schedule::where('type', $typeId)
+                                    ->where('rooms_id', $filteredRoom->id)
+                                    ->count();
+                            } else {
+                                $totalSchedules = App\Models\Schedule::where('type', $typeId)->count();
+                            }
+                        } else {
+                            $totalSchedules = App\Models\Schedule::where('type', $typeId)->count();
+                        }
+                        // 🔥 Hitung target dan completion rate berdasarkan filter
+                        if ($isFiltered && !empty($filterClass)) {
+                            $targetForRate = $classTargets[$filterClass] ?? 1;
+                            // 🔥 Untuk filtered, totalSchedules sudah dihitung hanya untuk kelas itu
+                            $completionRate = $targetForRate > 0 ? round(($totalSchedules / $targetForRate) * 100) : 0;
+                        } else {
+                            $targetForRate = $targetJpPerKromosom;
+                            $completionRate = $targetForRate > 0 ? round(($totalSchedules / $targetForRate) * 100) : 0;
+                        }                        $statusColor = $totalViolations == 0 ? 'success' : ($totalViolations < 10 ? 'warning' : 'danger');
                         $statusText = $totalViolations == 0 ? 'Sempurna' : ($totalViolations < 10 ? 'Perlu Perbaikan' : 'Banyak Pelanggaran');
                         
-                        // HITUNG SUGESTI
                         $missingJp = $targetJpPerKromosom - $totalSchedules;
                         $affectedClasses = count(array_filter($classReality, fn($c) => $c['percentage'] < 100));
                     @endphp
                     
                     <!-- RINGKASAN 4 KARTU -->
                     <div class="row text-center mb-3">
-                        <div class="col-3">
-                            <div class="p-2 border rounded bg-{{ $statusColor }}-light">
-                                <h3 class="mb-0 text-{{ $statusColor }}">{{ $completionRate }}%</h3>
-                                <small>Kelengkapan</small>
-                            </div>
+                    <div class="col-3">
+                        <div class="p-2 border rounded bg-{{ $statusColor }}-light">
+                            <h3 class="mb-0 text-{{ $statusColor }}">{{ $completionRate }}%</h3>
+                            <small>Kelengkapan</small>
+                            @if($isFiltered)
+                                <div class="small text-muted">(Kelas: {{ $filterClass }})</div>
+                            @endif
                         </div>
+                    </div>
+                        @php
+                            // 🔥 Hitung target hanya untuk kelas yang difilter (atau yang ada di kromosom)
+                            if ($isFiltered && !empty($filterClass)) {
+                                $filteredRoom = App\Models\Room::where('name', $filterClass)->first();
+                                if ($filteredRoom) {
+                                    $targetForDisplay = $classTargets[$filterClass] ?? 0;
+                                } else {
+                                    $targetForDisplay = $targetJpPerKromosom;
+                                }
+                            } else {
+                                $targetForDisplay = $targetJpPerKromosom;
+                            }
+                        @endphp
+
                         <div class="col-3">
                             <div class="p-2 border rounded">
-                                <h3 class="mb-0 text-info">{{ $totalSchedules }}/{{ $targetJpPerKromosom }}</h3>
+                                <h3 class="mb-0 text-info">{{ $totalSchedules }}/{{ $targetForDisplay }}</h3>
                                 <small>Total JP</small>
                                 @if($isFiltered)
                                     <div class="small text-muted">(Kelas: {{ $filterClass }})</div>

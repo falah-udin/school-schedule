@@ -1,0 +1,190 @@
+// ============================================================
+// SCRIPT ANALISIS DATABASE UNTUK ALGORITMA GENERATE JADWAL
+// ============================================================
+
+echo "\n";
+echo "═══════════════════════════════════════════════════════════════\n";
+echo "📊 ANALISIS DATA UNTUK ALGORITMA GENERATE JADWAL\n";
+echo "═══════════════════════════════════════════════════════════════\n\n";
+
+// 1. CEK MAPEL (COURSES)
+echo "1. 📚 DATA MATA PELAJARAN\n";
+echo "───────────────────────────────────────────────────────────────\n";
+$courses = App\Models\Course::select('id', 'name', 'hours_per_week', 'min_hours_per_day', 'max_hours_per_day')
+    ->orderBy('hours_per_week', 'desc')
+    ->get();
+
+foreach ($courses as $c) {
+    $status = '✅';
+    $problem = '';
+    
+    // Cek apakah mapel mungkin dijadwalkan
+    if ($c->hours_per_week < $c->min_hours_per_day) {
+        $status = '❌';
+        $problem = ' (TIDAK MUNGKIN: JP < min per hari)';
+    } elseif ($c->min_hours_per_day > $c->max_hours_per_day) {
+        $status = '❌';
+        $problem = ' (TIDAK MUNGKIN: min > max)';
+    } elseif ($c->hours_per_week % $c->min_hours_per_day != 0 && $c->min_hours_per_day == $c->max_hours_per_day) {
+        $status = '⚠️';
+        $problem = ' (PERINGATAN: kaku tapi tidak kelipatan)';
+    }
+    
+    echo "{$status} {$c->name}: {$c->hours_per_week} JP (min={$c->min_hours_per_day}, max={$c->max_hours_per_day}){$problem}\n";
+}
+echo "\n";
+
+// 2. CEK KELAS (ROOMS)
+echo "2. 🏫 DATA KELAS (ROMBEL)\n";
+echo "───────────────────────────────────────────────────────────────\n";
+$rooms = App\Models\Room::orderBy('name')->get();
+foreach ($rooms as $room) {
+    $teachs = App\Models\Teach::where('class_room', $room->id)->with('course')->get();
+    $totalJp = 0;
+    $mapelList = [];
+    foreach ($teachs as $t) {
+        $totalJp += $t->course->hours_per_week;
+        $mapelList[] = $t->course->name . "({$t->course->hours_per_week})";
+    }
+    
+    $jpPerDay = App\Models\Setting::get('jp_per_day', 8);
+    $maxJpPerWeek = $jpPerDay * 6;
+    $status = $totalJp <= $maxJpPerWeek ? '✅' : '❌';
+    
+    echo "{$status} {$room->name}: {$totalJp} JP / {$maxJpPerWeek} JP max\n";
+    echo "   Mapel: " . implode(', ', array_slice($mapelList, 0, 5)) . (count($mapelList) > 5 ? '...' : '') . "\n";
+}
+echo "\n";
+
+// 3. CEK SLOT WAKTU (TIMEDAYS)
+echo "3. 🕐 SLOT WAKTU YANG TERSEDIA\n";
+echo "───────────────────────────────────────────────────────────────\n";
+$timedays = App\Models\Timeday::with(['day', 'time'])->get();
+$slotsPerDay = [];
+foreach ($timedays as $td) {
+    $dayName = $td->day->name_day ?? 'Unknown';
+    if (!isset($slotsPerDay[$dayName])) {
+        $slotsPerDay[$dayName] = [];
+    }
+    $slotsPerDay[$dayName][] = $td->time->range ?? '-';
+}
+
+foreach ($slotsPerDay as $day => $slots) {
+    sort($slots);
+    echo "📅 {$day}: " . count($slots) . " slot\n";
+    echo "   Jam: " . implode(', ', $slots) . "\n\n"; // ← FULL, tidak dipotong
+}
+
+// 4. CEK GURU (LECTURERS) - DIPERBAIKI
+echo "4. 👨‍🏫 DATA GURU\n";
+echo "───────────────────────────────────────────────────────────────\n";
+
+// Gunakan query manual karena relasi mungkin tidak ada
+$lecturers = DB::table('lecturers')->get();
+$maxJpPerWeek = 8 * 6; // 48 JP
+
+foreach ($lecturers as $guru) {
+    // Hitung total JP dari tabel teachs
+    $totalJp = DB::table('teachs')
+        ->join('courses', 'courses.id', '=', 'teachs.courses_id')
+        ->where('teachs.lecturers_id', $guru->id)
+        ->sum('courses.hours_per_week');
+    
+    $mapelCount = DB::table('teachs')
+        ->where('teachs.lecturers_id', $guru->id)
+        ->count();
+    
+    $status = $totalJp <= $maxJpPerWeek ? '✅' : '⚠️';
+    echo "{$status} {$guru->name}: {$totalJp} JP (mengajar {$mapelCount} mapel)\n";
+}
+echo "\n";
+
+// 5. ANALISIS PER KELAS - DETAIL
+echo "5. 📊 ANALISIS PER KELAS (DETAIL)\n";
+echo "───────────────────────────────────────────────────────────────\n";
+foreach ($rooms as $room) {
+    echo "\n🏫 KELAS {$room->name}:\n";
+    
+    $teachs = App\Models\Teach::where('class_room', $room->id)->with('course')->get();
+    $totalJp = 0;
+    $totalMinDays = 0;
+    
+    foreach ($teachs as $t) {
+        $course = $t->course;
+        $totalJp += $course->hours_per_week;
+        
+        // Hitung minimal hari yang dibutuhkan
+        $minDaysNeeded = ceil($course->hours_per_week / $course->max_hours_per_day);
+        $totalMinDays += $minDaysNeeded;
+        
+        // Cek kemungkinan distribusi
+        $possibleDistributions = [];
+        for ($days = 1; $days <= 6; $days++) {
+            if ($days * $course->min_hours_per_day <= $course->hours_per_week && 
+                $days * $course->max_hours_per_day >= $course->hours_per_week) {
+                $possibleDistributions[] = $days;
+            }
+        }
+        
+        $status = !empty($possibleDistributions) ? '✅' : '❌';
+        echo "   {$status} {$course->name}: {$course->hours_per_week} JP (min={$course->min_hours_per_day}, max={$course->max_hours_per_day}) - butuh " . implode(' atau ', $possibleDistributions) . " hari\n";
+    }
+    
+    echo "   ───────────────────────────────────────────\n";
+    echo "   📊 TOTAL JP KELAS: {$totalJp} JP\n";
+    echo "   📅 Minimal hari yang dibutuhkan: {$totalMinDays} hari (dari 6 hari tersedia)\n";
+    
+    if ($totalJp > 48) {
+        echo "   ❌ PERINGATAN: Total JP melebihi kapasitas (max 48 JP/minggu)!\n";
+    } elseif ($totalMinDays > 6) {
+        echo "   ⚠️ PERINGATAN: Butuh lebih dari 6 hari untuk menjadwalkan semua mapel!\n";
+    } else {
+        echo "   ✅ Secara teoritis MUNGKIN dijadwalkan\n";
+    }
+}
+echo "\n";
+
+// 6. REKOMENDASI
+echo "6. 💡 REKOMENDASI\n";
+echo "───────────────────────────────────────────────────────────────\n";
+
+// Cek mapel bermasalah
+$problemCourses = App\Models\Course::where('hours_per_week', '<', DB::raw('min_hours_per_day'))
+    ->orWhere('min_hours_per_day', '>', DB::raw('max_hours_per_day'))
+    ->get();
+
+if ($problemCourses->count() > 0) {
+    echo "⚠️ MAPEL BERMASALAH (perlu diperbaiki):\n";
+    foreach ($problemCourses as $pc) {
+        echo "   - {$pc->name}: {$pc->hours_per_week} JP, min={$pc->min_hours_per_day}, max={$pc->max_hours_per_day}\n";
+    }
+} else {
+    echo "✅ Semua mapel memiliki parameter yang valid.\n";
+}
+
+// Cek apakah ada kelas overload
+$overloadClasses = [];
+foreach ($rooms as $room) {
+    $teachs = App\Models\Teach::where('class_room', $room->id)->with('course')->get();
+    $totalJp = 0;
+    foreach ($teachs as $t) {
+        $totalJp += $t->course->hours_per_week;
+    }
+    if ($totalJp > 48) {
+        $overloadClasses[] = $room->name . " ({$totalJp} JP)";
+    }
+}
+
+if (!empty($overloadClasses)) {
+    echo "⚠️ KELAS OVERLOAD (melebihi 48 JP/minggu):\n";
+    foreach ($overloadClasses as $oc) {
+        echo "   - {$oc}\n";
+    }
+} else {
+    echo "✅ Semua kelas masih dalam kapasitas (≤48 JP/minggu).\n";
+}
+
+echo "\n";
+echo "═══════════════════════════════════════════════════════════════\n";
+echo "📌 Saran: Pastikan tidak ada kelas overload dan mapel dengan min besar (3) memiliki total JP kelipatan min per hari.\n";
+echo "═══════════════════════════════════════════════════════════════\n";

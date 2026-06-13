@@ -16,6 +16,7 @@
             <label>Jam per Minggu (JP)</label>
             <small class="text-muted d-block">1 JP = {{ $jpDuration }} menit</small>
             {!! Form::select('hours_per_week', [
+                0 => "0 JP (Tidak dijadwalkan / Offline)",
                 1 => "1 JP ({$jpDuration} menit)",
                 2 => "2 JP (" . (2 * $jpDuration) . " menit)",
                 3 => "3 JP (" . (3 * $jpDuration) . " menit)",
@@ -23,16 +24,20 @@
                 5 => "5 JP (" . (5 * $jpDuration) . " menit)",
                 6 => "6 JP (" . (6 * $jpDuration) . " menit)",
             ], isset($courses->hours_per_week) ? $courses->hours_per_week : 2, ['class' => 'form-control']) !!}
+            <small class="text-muted text-danger">Pilih 0 jika mapel tidak perlu dijadwalkan</small>
         </div>
     </div>
     <div class="col-md-4">
         <div class="form-group">
             <label>Minimal Jam per Hari (JP)</label>
             {!! Form::select('min_hours_per_day', [
+                0 => "0 JP (Tidak ada minimal)",
                 1 => "1 JP ({$jpDuration} menit)",
-                2 => "2 JP (" . (2 * $jpDuration) . " menit)",                3 => "3 JP (" . (3 * $jpDuration) . " menit)",
+                2 => "2 JP (" . (2 * $jpDuration) . " menit)",
                 3 => "3 JP (" . (3 * $jpDuration) . " menit)",
+                4 => "4 JP (" . (4 * $jpDuration) . " menit)",
             ], isset($courses->min_hours_per_day) ? $courses->min_hours_per_day : 1, ['class' => 'form-control']) !!}
+            <small class="text-muted">Minimal jam per hari. Pilih 0 jika tidak ada minimal</small>
         </div>
     </div>
     <div class="col-md-4">
@@ -40,11 +45,13 @@
             <label>Maksimal Jam per Hari (JP)</label>
             <small class="text-muted d-block">Maksimal {{ $jpPerDay }} JP/hari</small>
             {!! Form::select('max_hours_per_day', [
+                0 => "0 JP (Tidak boleh dijadwalkan)",
                 1 => "1 JP ({$jpDuration} menit)",
                 2 => "2 JP (" . (2 * $jpDuration) . " menit)",
                 3 => "3 JP (" . (3 * $jpDuration) . " menit)",
                 4 => "4 JP (" . (4 * $jpDuration) . " menit)",
             ], isset($courses->max_hours_per_day) ? min($courses->max_hours_per_day, $jpPerDay) : 2, ['class' => 'form-control']) !!}
+            <small class="text-muted">Maksimal jam per hari. Pilih 0 jika mapel tidak boleh dijadwalkan</small>
         </div>
     </div>
 </div>
